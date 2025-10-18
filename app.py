@@ -107,7 +107,7 @@ def extract_data_from_docx(uploaded_file):
 
         # Extract additional fields
         nguon_tra_no = search_patterns([r"Nguồn trả nợ:\s*- (.+)"], full_text)
-        tai_san_bao_dam = search_patterns([r"Tài sản bảo đảm:\s*(.+)"], full_text)
+        tai_san_bao_dam = search_patterns([r"Tổng tài sản đảm bảo\s*(.+)"], full_text)
         doanh_thu_phuong_an = search_patterns([r"Doanh thu của phương án:\s*([\d.,]+)\s*đồng"], full_text)
         chi_phi_kinh_doanh = search_patterns([r"Chi phí kinh doanh:\s*([\d.,]+)\s*đồng"], full_text)
         chenh_lech_thu_chi = search_patterns([r"Chênh lệch thu chi:\s*([\d.,]+)\s*đồng"], full_text)
