@@ -1,5 +1,8 @@
 streamlit
 python-docx
+regex
 pandas
-openpyxl
+matplotlib
 google-generativeai
+fpdf
+xlsxwriter
