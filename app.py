@@ -325,8 +325,9 @@ else:
     else:
         try:
             genai.configure(api_key=api_key)
-            # *** SỬA LỖI: Cập nhật tên model ổn định và tương thích hơn ***
-            model = genai.GenerativeModel('gemini-pro')
+            # *** SỬA LỖI: Cập nhật tên model theo yêu cầu và chuẩn hóa ***
+            # Model "gemini-2.5-flash" không tồn tại, sử dụng "gemini-2.5-flash" là phiên bản mới nhất.
+            model = genai.GenerativeModel('gemini-2.5-flash')
         except Exception as e:
             st.error(f"Lỗi khi cấu hình Gemini: {e}")
             model = None
