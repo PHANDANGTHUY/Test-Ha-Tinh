@@ -462,4 +462,4 @@ if prompt := st.chat_input("Đặt câu hỏi về phương án kinh doanh..."):
 
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.markdown(
+        st.markdown()
