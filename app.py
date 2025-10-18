@@ -30,69 +30,171 @@ def extract_data_from_docx(uploaded_file):
         doc = docx.Document(uploaded_file)
         full_text = "\n".join([para.text for para in doc.paragraphs])
         
-        # Trích xuất thông tin khách hàng
-        ho_ten_match = re.search(r"(?:Bà:|Ông:|Họ và tên|Họ tên khách hàng)\s*[:\*]*\s*\**(.*?)\*+", full_text, re.IGNORECASE)
-        cccd_match = re.search(r"CCCD\s+số[:\s]*\**([\d]+)\*+", full_text, re.IGNORECASE)
-        dia_chi_match = re.search(r"Nơi cư trú:\s*(.*?)(?:\n|Số điện thoại)", full_text, re.IGNORECASE)
-        sdt_match = re.search(r"Số điện thoại:\s*([\d]+)", full_text, re.IGNORECASE)
-        
-        # Trích xuất thông tin vay vốn
-        muc_dich_match = re.search(r"Mục đích vay:\s*(.*?)(?:\n|\s*\-)", full_text, re.IGNORECASE)
-        
-        # Trích xuất từ bảng "Tổng nhu cầu vốn"
-        tong_nhu_cau_match = re.search(r"Nhu cầu vốn lưu động trên một vòng quay.*?(\d+[\d.,]*)", full_text, re.IGNORECASE | re.DOTALL)
-        von_doi_ung_match = re.search(r"Vốn đối ứng.*?đồng\s+(\d+[\d.,]*)", full_text, re.IGNORECASE | re.DOTALL)
-        so_tien_vay_match = re.search(r"Vốn vay Agribank.*?đồng\s+(\d+[\d.,]*)", full_text, re.IGNORECASE | re.DOTALL)
-        
-        # Lãi suất và thời gian vay
-        lai_suat_match = re.search(r"Lãi suất đề nghị:\s*\**([\d.,]+)\*+%", full_text, re.IGNORECASE)
-        thoi_gian_match = re.search(r"Thời gian duy trì hạn mức tín dụng:\s*\**([\d]+)\*+\s*tháng", full_text, re.IGNORECASE)
-        thoi_han_vay_match = re.search(r"Thời hạn cho vay:\s*(\d+)\s*tháng", full_text, re.IGNORECASE)
-        
         def clean_number(text):
             """Làm sạch và chuyển đổi số."""
             if text:
-                return text.replace(".", "").replace(",", "").strip()
+                cleaned = text.replace(".", "").replace(",", "").strip()
+                return cleaned
             return None
         
+        # Trích xuất thông tin khách hàng - tìm người được ủy quyền hoặc người đầu tiên
+        ho_ten = None
+        ho_ten_patterns = [
+            r"Đại diện theo ủy quyền là (?:Bà|Ông):\s*\**(.*?)\*+",  # Người được ủy quyền
+            r"(?:^|\n)(?:\*\*)?(?:1\.|Bà:|Ông:)\s*(?:\*\*)?([^\n\*]+?)(?:\*\*)?[\.\s]*Sinh ngày",  # Người đầu tiên
+            r"(?:Họ và tên|Họ tên khách hàng):\s*\**(.*?)\*+",
+        ]
+        for pattern in ho_ten_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                ho_ten = match.group(1).strip()
+                break
+        
+        # Trích xuất CCCD - lấy số đầu tiên tìm được
+        cccd = None
+        cccd_patterns = [
+            r"CCCD\s+số:\s*\**([\d]+)\*+",
+            r"CCCD\s+số\s*[\*:]*([\d]+)",
+            r"Căn cước công dân[:\s]+([\d]+)",
+        ]
+        for pattern in cccd_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                cccd = match.group(1).strip()
+                break
+        
+        # Trích xuất địa chỉ
+        dia_chi = None
+        dia_chi_patterns = [
+            r"Nơi cư trú:\s*([^\n]+?)(?:\n|Số điện thoại)",
+            r"Địa chỉ:\s*([^\n]+)",
+        ]
+        for pattern in dia_chi_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                dia_chi = match.group(1).strip()
+                break
+        
+        # Trích xuất số điện thoại
+        sdt = None
+        sdt_match = re.search(r"Số điện thoại:\s*([\d]+)", full_text, re.IGNORECASE)
+        if sdt_match:
+            sdt = sdt_match.group(1).strip()
+        
+        # Trích xuất mục đích vay
+        muc_dich = "Kinh doanh vật liệu xây dựng"
+        muc_dich_patterns = [
+            r"Mục đích vay:\s*([^\n]+)",
+            r"Lĩnh vực kinh doanh chính:\s*([^\n]+)",
+        ]
+        for pattern in muc_dich_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                muc_dich = match.group(1).strip()
+                break
+        
+        # Trích xuất từ bảng "Tổng nhu cầu vốn"
+        tong_nhu_cau = 7685931642
+        tong_nhu_cau_patterns = [
+            r"Nhu cầu vốn lưu động.*?đồng\s+([\d.,]+)",
+            r"Tổng nhu cầu vốn.*?(?:đồng|VNĐ)\s*([\d.,]+)",
+        ]
+        for pattern in tong_nhu_cau_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE | re.DOTALL)
+            if match:
+                try:
+                    tong_nhu_cau = int(clean_number(match.group(1)))
+                    break
+                except:
+                    pass
+        
+        # Trích xuất vốn đối ứng
+        von_doi_ung = 385931642
+        von_doi_ung_patterns = [
+            r"Vốn đối ứng.*?đồng\s+([\d.,]+)",
+            r"Vốn tự có.*?(?:đồng|VNĐ)\s*([\d.,]+)",
+        ]
+        for pattern in von_doi_ung_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE | re.DOTALL)
+            if match:
+                try:
+                    von_doi_ung = int(clean_number(match.group(1)))
+                    break
+                except:
+                    pass
+        
+        # Trích xuất số tiền vay
+        so_tien_vay = 7300000000
+        so_tien_vay_patterns = [
+            r"Vốn vay Agribank.*?đồng\s+([\d.,]+)",
+            r"Số tiền vay.*?(?:đồng|VNĐ)\s*([\d.,]+)",
+            r"Đề nghị vay.*?(?:đồng|VNĐ)\s*([\d.,]+)",
+        ]
+        for pattern in so_tien_vay_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE | re.DOTALL)
+            if match:
+                try:
+                    so_tien_vay = int(clean_number(match.group(1)))
+                    break
+                except:
+                    pass
+        
+        # Trích xuất lãi suất
+        lai_suat = 5.0
+        lai_suat_patterns = [
+            r"Lãi suất đề nghị:\s*\**([\d.,]+)\*+%",
+            r"Lãi suất:\s*([\d.,]+)\s*%",
+        ]
+        for pattern in lai_suat_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                try:
+                    lai_suat = float(match.group(1).replace(",", "."))
+                    break
+                except:
+                    pass
+        
+        # Trích xuất thời gian vay
+        thoi_gian_vay = 1
+        thoi_gian_patterns = [
+            r"Thời gian duy trì hạn mức tín dụng:\s*\**([\d]+)\*+\s*tháng",
+            r"Thời hạn cho vay:\s*([\d]+)\s*tháng",
+            r"Thời gian vay:\s*([\d]+)\s*(?:năm|tháng)",
+        ]
+        for pattern in thoi_gian_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                try:
+                    thoi_gian = int(match.group(1))
+                    # Nếu là tháng và >= 12 thì chuyển sang năm
+                    if "tháng" in pattern.lower() and thoi_gian >= 12:
+                        thoi_gian_vay = thoi_gian // 12
+                    elif "năm" in pattern.lower():
+                        thoi_gian_vay = thoi_gian
+                    else:
+                        thoi_gian_vay = max(1, thoi_gian // 12)
+                    break
+                except:
+                    pass
+        
         extracted = {
-            "ho_ten": ho_ten_match.group(1).strip() if ho_ten_match else None,
-            "cccd": cccd_match.group(1).strip() if cccd_match else None,
-            "dia_chi": dia_chi_match.group(1).strip() if dia_chi_match else None,
-            "sdt": sdt_match.group(1).strip() if sdt_match else None,
-            "muc_dich": muc_dich_match.group(1).strip() if muc_dich_match else "Kinh doanh vật liệu xây dựng",
+            "ho_ten": ho_ten if ho_ten else "",
+            "cccd": cccd if cccd else "",
+            "dia_chi": dia_chi if dia_chi else "",
+            "sdt": sdt if sdt else "",
+            "muc_dich": muc_dich,
+            "tong_nhu_cau": tong_nhu_cau,
+            "von_doi_ung": von_doi_ung,
+            "so_tien_vay": so_tien_vay,
+            "lai_suat": lai_suat,
+            "thoi_gian_vay": thoi_gian_vay,
         }
         
-        # Chuyển đổi các số
-        try:
-            extracted["tong_nhu_cau"] = int(clean_number(tong_nhu_cau_match.group(1))) if tong_nhu_cau_match else 7685931642
-        except:
-            extracted["tong_nhu_cau"] = 7685931642
-            
-        try:
-            extracted["von_doi_ung"] = int(clean_number(von_doi_ung_match.group(1))) if von_doi_ung_match else 385931642
-        except:
-            extracted["von_doi_ung"] = 385931642
-            
-        try:
-            extracted["so_tien_vay"] = int(clean_number(so_tien_vay_match.group(1))) if so_tien_vay_match else 7300000000
-        except:
-            extracted["so_tien_vay"] = 7300000000
-            
-        try:
-            extracted["lai_suat"] = float(lai_suat_match.group(1).replace(",", ".")) if lai_suat_match else 5.0
-        except:
-            extracted["lai_suat"] = 5.0
-            
-        try:
-            thoi_gian = int(thoi_gian_match.group(1)) if thoi_gian_match else 12
-            extracted["thoi_gian_vay"] = thoi_gian // 12 if thoi_gian >= 12 else 1
-        except:
-            extracted["thoi_gian_vay"] = 1
-            
         return extracted
     except Exception as e:
         st.error(f"Lỗi khi đọc file .docx: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return {}
 
 
@@ -462,4 +564,4 @@ if prompt := st.chat_input("Đặt câu hỏi về phương án kinh doanh..."):
 
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.markdown()
+        st.markdown(
