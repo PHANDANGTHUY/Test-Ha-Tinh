@@ -9,6 +9,19 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import base64
 from fpdf import FPDF
 from datetime import datetime, timedelta
+import requests
+import os
+
+# Download fonts if not exist
+if not os.path.exists('DejaVuSans.ttf'):
+    r = requests.get('https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf')
+    with open('DejaVuSans.ttf', 'wb') as f:
+        f.write(r.content)
+
+if not os.path.exists('DejaVuSans-Bold.ttf'):
+    r = requests.get('https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf')
+    with open('DejaVuSans-Bold.ttf', 'wb') as f:
+        f.write(r.content)
 
 # Function to extract data from docx
 def extract_data_from_docx(file):
@@ -71,23 +84,31 @@ def create_charts(data, metrics):
 
 # PDF export function
 class PDF(FPDF):
+    def __init__(self):
+        super().__init__()
+        self.add_font('DejaVuSans', '', 'DejaVuSans.ttf', uni=True)
+        self.add_font('DejaVuSans', 'B', 'DejaVuSans-Bold.ttf', uni=True)
+
     def header(self):
-        self.set_font('Arial', 'B', 12)
-        self.cell(0, 10, 'Bao cao Tham dinh Phuong an Kinh doanh', 0, 1, 'C')
+        self.set_font('DejaVuSans', 'B', 12)
+        self.cell(0, 10, 'Báo cáo Thẩm định Phương án Kinh doanh', 0, 1, 'C')
 
 def export_report(data, metrics, df_repayment, analysis):
     pdf = PDF()
     pdf.add_page()
-    pdf.set_font('Arial', '', 12)
+    pdf.set_font('DejaVuSans', '', 12)
     for key, value in data.items():
-        pdf.cell(0, 10, f"{key}: {format_number(value) if isinstance(value, (int, float)) else value}", 0, 1)
-    pdf.cell(0, 10, 'Chi tieu tai chinh:', 0, 1)
+        text = f"{key}: {format_number(value) if isinstance(value, (int, float)) else value}"
+        pdf.cell(0, 10, text, 0, 1)
+    pdf.cell(0, 10, 'Chỉ tiêu tài chính:', 0, 1)
     for key, value in metrics.items():
-        pdf.cell(0, 10, f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}", 0, 1)
-    pdf.cell(0, 10, 'Ke hoach tra no:', 0, 1)
+        text = f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}"
+        pdf.cell(0, 10, text, 0, 1)
+    pdf.cell(0, 10, 'Kế hoạch trả nợ:', 0, 1)
     for _, row in df_repayment.iterrows():
-        pdf.cell(0, 10, str(row.to_dict()), 0, 1)
-    pdf.cell(0, 10, 'Phan tich AI:', 0, 1)
+        text = str(row.to_dict())
+        pdf.multi_cell(0, 10, text)
+    pdf.cell(0, 10, 'Phân tích AI:', 0, 1)
     pdf.multi_cell(0, 10, analysis)
     output = io.BytesIO()
     pdf.output(output)
