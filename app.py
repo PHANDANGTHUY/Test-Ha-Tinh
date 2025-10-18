@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import docx
 import re
@@ -12,13 +11,13 @@ def extract_info_from_docx(file):
     doc = docx.Document(file)
     full_text = "\n".join([para.text for para in doc.paragraphs])
     
-    # Extract customer info (assuming patterns; adjust as needed)
-    name_pattern = r"(\w+\s+\w+\s+\w+)"  # Placeholder, based on filename or content
+    # Extract customer info
+    name_pattern = r"(\w+\s+\w+\s+\w+)"
     cccd_pattern = r"CCCD:\s*(\d+)"
     address_pattern = r"Địa chỉ:\s*(.+)"
     phone_pattern = r"Số điện thoại:\s*(\d+)"
     
-    name = re.search(name_pattern, full_text) or re.search(name_pattern, file.name)  # Fallback to filename
+    name = re.search(name_pattern, full_text) or re.search(name_pattern, file.name)
     name = name.group(1) if name else "Không tìm thấy"
     cccd = re.search(cccd_pattern, full_text)
     cccd = cccd.group(1) if cccd else "Không tìm thấy"
@@ -34,14 +33,14 @@ def extract_info_from_docx(file):
     total_capital_need = re.search(r"Tổng nhu cầu vốn:\s*(\d+\.?\d*)", full_text)
     total_capital_need = float(total_capital_need.group(1).replace(".", "").replace(",", ".")) if total_capital_need else 0.0
     
-    own_capital = re.search(r"Vốn đối ứng:\s*(\d+\.?\d*)", full_text)  # Assuming it's present; else manual
+    own_capital = re.search(r"Vốn đối ứng:\s*(\d+\.?\d*)", full_text)
     own_capital = float(own_capital.group(1).replace(".", "").replace(",", ".")) if own_capital else 0.0
     
-    loan_amount = re.search(r"Số tiền vay:\s*(\d+\.?\d*)", full_text) or re.search(r"Doanh thu của phương án:\s*(\d+\.?\d*)", full_text)  # Fallback
+    loan_amount = re.search(r"Số tiền vay:\s*(\d+\.?\d*)", full_text) or re.search(r"Doanh thu của phương án:\s*(\d+\.?\d*)", full_text)
     loan_amount = float(loan_amount.group(1).replace(".", "").replace(",", ".")) if loan_amount else 0.0
     
     interest_rate = re.search(r"Lãi suất đề nghị:\s*(\d+\.?\d*)%", full_text)
-    interest_rate = float(interest_rate.group(1)) / 100 if interest_rate else 0.05  # Default 5%
+    interest_rate = float(interest_rate.group(1)) / 100 if interest_rate else 0.05
     
     loan_term_months = re.search(r"Thời hạn cho vay:\s*(\d+)\s*tháng", full_text)
     loan_term_months = int(loan_term_months.group(1)) if loan_term_months else 3
@@ -224,33 +223,43 @@ if uploaded_file:
         with st.container():
             st.header("🤖 Phân tích bằng Gemini 2.0 Flash")
             with st.expander("Xem phân tích chi tiết"):
-                model = GenerativeModel('gemini-2.0-flash')
-                prompt = f"Phân tích phương án sử dụng vốn sau và đề xuất cho vay hay không: {full_text}"
-                response = model.generate_content(prompt)
-                st.markdown(response.text)
-                
-                rec_prompt = f"Dựa trên phân tích, đề xuất cho vay hay không cho vay? Lý do: {response.text}"
-                rec_response = model.generate_content(rec_prompt)
-                st.markdown("**Đề xuất**: " + rec_response.text)
+                try:
+                    model = GenerativeModel('gemini-2.0-flash')
+                    prompt = f"Phân tích phương án sử dụng vốn sau và đề xuất cho vay hay không: {full_text}"
+                    response = model.generate_content(prompt)
+                    st.markdown(response.text)
+                    
+                    rec_prompt = f"Dựa trên phân tích, đề xuất cho vay hay không cho vay? Lý do: {response.text}"
+                    rec_response = model.generate_content(rec_prompt)
+                    st.markdown("**Đề xuất**: " + rec_response.text)
+                except Exception as e:
+                    st.error(f"Lỗi khi gọi Gemini API: {str(e)}")
     
     # Chatbox with Gemini
     if api_key:
         with st.container():
             st.header("💬 Chat với Gemini 2.0 Flash về phương án")
             if "chat_session" not in st.session_state:
-                model = GenerativeModel('gemini-2.0-flash')
-                st.session_state.chat_session = model.start_chat(history=[])
+                try:
+                    model = GenerativeModel('gemini-2.0-flash')
+                    st.session_state.chat_session = model.start_chat(history=[])
+                except Exception as e:
+                    st.error(f"Lỗi khi khởi tạo chat session: {str(e)}")
             
             with st.expander("Cuộc trò chuyện"):
-                for message in st.session_state.chat_session.history:
-                    role = "Người dùng" if message.role == "user" else "Gemini"
-                    st.write(f"**{role}**: {message.parts[0].text}")
+                if "chat_session" in st.session_state:
+                    for message in st.session_state.chat_session.history:
+                        role = "Người dùng" if message.role == "user" else "Gemini"
+                        st.write(f"**{role}**: {message.parts[0].text}")
                 
-                user_input = st.text_input("Hỏi về phương án:", key="chat_input")
-                if user_input:
-                    response = st.session_state.chat_session.send_message(user_input)
-                    st.write(f"**Người dùng**: {user_input}")
-                    st.write(f"**Gemini**: {response.text}")
+                    user_input = st.text_input("Hỏi về phương án:", key="chat_input")
+                    if user_input:
+                        try:
+                            response = st.session_state.chat_session.send_message(user_input)
+                            st.write(f"**Người dùng**: {user_input}")
+                            st.write(f"**Gemini**: {response.text}")
+                        except Exception as e:
+                            st.error(f"Lỗi khi gửi tin nhắn đến Gemini: {str(e)}")
     
     # Export project info
     with st.container():
@@ -267,4 +276,3 @@ if uploaded_file:
         )
 else:
     st.info("Vui lòng tải lên file .docx để bắt đầu thẩm định.")
-```
