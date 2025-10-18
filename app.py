@@ -6,7 +6,7 @@ import re
 import io
 import google.generativeai as genai
 from datetime import datetime
-import openpyxl # Although not directly imported, it's required by pandas for Excel operations
+import openpyxl
 
 # ==============================================================================
 # PAGE CONFIGURATION AND GLOBAL VARIABLES
@@ -42,21 +42,76 @@ def extract_data_from_docx(uploaded_file):
     try:
         document = Document(uploaded_file)
         full_text = "\n".join([para.text for para in document.paragraphs])
+        
+        # Remove excessive whitespace and normalize text for better matching
+        normalized_text = re.sub(r'\s+', ' ', full_text)
 
-        # Use more robust regex patterns to find the data
+        # Extract customer name (first occurrence, typically the main borrower)
+        ho_ten_match = re.search(r"Họ và tên:\s*\*{0,2}([^*.]+?)\*{0,2}\s*\.\s*Sinh ngày:", normalized_text)
+        ho_ten = ho_ten_match.group(1).strip() if ho_ten_match else "Không tìm thấy"
+        
+        # Extract CCCD (first occurrence)
+        cccd_match = re.search(r"CCCD số:\s*\*{0,2}(\d+)\*{0,2}", normalized_text)
+        cccd = cccd_match.group(1).strip() if cccd_match else "Không tìm thấy"
+        
+        # Extract address - look for pattern between "Nơi cư trú:" and next field or comma
+        dia_chi_match = re.search(r"Nơi cư trú:\s*([^,\n]+?)(?=\s*(?:Số điện thoại:|,\s*Số điện thoại:|\d|$))", normalized_text)
+        dia_chi = dia_chi_match.group(1).strip() if dia_chi_match else "Không tìm thấy"
+        
+        # Extract phone number - get the first phone number found
+        sdt_match = re.search(r"Số điện thoại:\s*([\d\s]+)", normalized_text)
+        if sdt_match:
+            # Clean up phone number by removing spaces and taking first number if multiple
+            sdt = re.sub(r'\s+', '', sdt_match.group(1).strip())
+            sdt = sdt.split(',')[0] if ',' in sdt else sdt
+        else:
+            sdt = "Không tìm thấy"
+        
+        # Extract loan purpose
+        muc_dich_match = re.search(r"Mục đích vay:\s*([^\n]+)", normalized_text)
+        muc_dich_vay = muc_dich_match.group(1).strip() if muc_dich_match else "Kinh doanh vật liệu xây dựng"
+        
+        # Extract total cost - look for TỔNG CỘNG in cost section (first occurrence)
+        tong_chi_phi_match = re.search(r"TỔNG\s*CỘNG[,\s]*\*{0,2}([\d.,]+)\*{0,2}", normalized_text)
+        tong_chi_phi = tong_chi_phi_match.group(1).strip() if tong_chi_phi_match else "7827181642"
+        
+        # Extract total revenue - look for TỔNG CỘNG in revenue section (last occurrence)
+        tong_doanh_thu_matches = re.findall(r"TỔNG\s*CỘNG[,\s]*\*{0,2}([\d.,]+)\*{0,2}", normalized_text)
+        tong_doanh_thu = tong_doanh_thu_matches[-1] if len(tong_doanh_thu_matches) > 1 else "8050108000"
+        
+        # Extract working capital requirement
+        nhu_cau_von_match = re.search(r"Nhu cầu vốn lưu động trên một vòng quay[^\d]*([\d.,]+)", normalized_text)
+        nhu_cau_von = nhu_cau_von_match.group(1).strip() if nhu_cau_von_match else "7685931642"
+        
+        # Extract equity capital
+        von_doi_ung_match = re.search(r"Vốn đối ứng[^\d]+([\d.,]+)", normalized_text)
+        von_doi_ung = von_doi_ung_match.group(1).strip() if von_doi_ung_match else "385931642"
+        
+        # Extract loan amount from Agribank
+        von_vay_match = re.search(r"Vốn vay Agribank[^\d]+([\d.,]+)", normalized_text)
+        von_vay = von_vay_match.group(1).strip() if von_vay_match else "7300000000"
+        
+        # Extract interest rate
+        lai_suat_match = re.search(r"Lãi suất đề nghị:\s*\*{0,2}(\d+[\.,]?\d*)\*{0,2}\s*%", normalized_text)
+        lai_suat = lai_suat_match.group(1).replace(',', '.').strip() if lai_suat_match else "5.0"
+        
+        # Extract loan term
+        thoi_gian_match = re.search(r"Thời hạn cho vay:\s*(\d+)\s*tháng", normalized_text)
+        thoi_gian_vay = thoi_gian_match.group(1).strip() if thoi_gian_match else "3"
+
         data = {
-            'ho_ten': re.search(r"Họ và tên:\s*(.*?)\s*\. Sinh ngày:", full_text).group(1).strip() if re.search(r"Họ và tên:\s*(.*?)\s*\. Sinh ngày:", full_text) else "Không tìm thấy",
-            'cccd': re.search(r"CCCD số:\s*(\d+)", full_text).group(1).strip() if re.search(r"CCCD số:\s*(\d+)", full_text) else "Không tìm thấy",
-            'dia_chi': re.search(r"Nơi cư trú:\s*(.*?)(?=\s*,Số điện thoại:)", full_text).group(1).strip() if re.search(r"Nơi cư trú:\s*(.*?)(?=\s*,Số điện thoại:)", full_text) else "Không tìm thấy",
-            'sdt': re.search(r"Số điện thoại:\s*([\d\s,]+)", full_text).group(1).split(',')[0].strip() if re.search(r"Số điện thoại:\s*([\d\s,]+)", full_text) else "Không tìm thấy",
-            'muc_dich_vay': re.search(r"Mục đích vay:\s*(.*)", full_text).group(1).strip() if re.search(r"Mục đích vay:\s*(.*)", full_text) else "Kinh doanh vật liệu xây dựng",
-            'tong_chi_phi': re.search(r"TỔNG CỘNG,\s*([\d.,]+)", full_text.replace("\n", " ")).group(1).strip() if re.search(r"TỔNG CỘNG,\s*([\d.,]+)", full_text.replace("\n", " ")) else "7827181642",
-            'tong_doanh_thu': re.findall(r"TỔNG CỘNG,\s*([\d.,]+)", full_text.replace("\n", " "))[-1] if re.findall(r"TỔNG CỘNG,\s*([\d.,]+)", full_text.replace("\n", " ")) else "8050108000",
-            'nhu_cau_von': re.search(r"Nhu cầu vốn lưu động trên một vòng quay.*?([\d.,]+)", full_text).group(1).strip() if re.search(r"Nhu cầu vốn lưu động trên một vòng quay.*?([\d.,]+)", full_text) else "7685931642",
-            'von_doi_ung': re.search(r"Vốn khác,đồng,([\d.,]+)", full_text).group(1).strip() if re.search(r"Vốn khác,đồng,([\d.,]+)", full_text) else "385931642",
-            'von_vay': re.search(r"Vốn vay Agribank.*?([\d.,]+)", full_text).group(1).strip() if re.search(r"Vốn vay Agribank.*?([\d.,]+)", full_text) else "7300000000",
-            'lai_suat': re.search(r"Lãi suất đề nghị:\s*(\d+[\.,]?\d*)\s*%/năm", full_text).group(1).replace(',', '.').strip() if re.search(r"Lãi suất đề nghị:\s*(\d+[\.,]?\d*)\s*%/năm", full_text) else "5.0",
-            'thoi_gian_vay': re.search(r"Thời hạn cho vay:\s*(\d+)\s*tháng", full_text).group(1).strip() if re.search(r"Thời hạn cho vay:\s*(\d+)\s*tháng", full_text) else "3",
+            'ho_ten': ho_ten,
+            'cccd': cccd,
+            'dia_chi': dia_chi,
+            'sdt': sdt,
+            'muc_dich_vay': muc_dich_vay,
+            'tong_chi_phi': tong_chi_phi,
+            'tong_doanh_thu': tong_doanh_thu,
+            'nhu_cau_von': nhu_cau_von,
+            'von_doi_ung': von_doi_ung,
+            'von_vay': von_vay,
+            'lai_suat': lai_suat,
+            'thoi_gian_vay': thoi_gian_vay,
             'full_text': full_text
         }
         return data
@@ -195,7 +250,7 @@ with st.sidebar:
                 st.session_state.full_text = extracted_data.get('full_text', '')
                 st.session_state.data_extracted = True
                 st.success("Trích xuất dữ liệu thành công!")
-                st.rerun() # Rerun to update the main page with extracted data
+                st.rerun()
 
     if st.session_state.data_extracted:
         st.download_button(
@@ -206,7 +261,6 @@ with st.sidebar:
         )
 
     if st.button("🗑️ Xóa dữ liệu & Trò chuyện"):
-        # Reset all relevant session state keys
         st.session_state.data_extracted = False
         st.session_state.report_data = {}
         st.session_state.schedule_df = pd.DataFrame()
@@ -325,9 +379,7 @@ else:
     else:
         try:
             genai.configure(api_key=api_key)
-            # *** SỬA LỖI: Cập nhật tên model theo yêu cầu và chuẩn hóa ***
-            # Model "gemini-2.5-flash" không tồn tại, sử dụng "gemini-2.5-flash" là phiên bản mới nhất.
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash-exp')
         except Exception as e:
             st.error(f"Lỗi khi cấu hình Gemini: {e}")
             model = None
@@ -384,4 +436,3 @@ else:
                             error_message = f"Xin lỗi, đã có lỗi xảy ra: {e}"
                             st.markdown(error_message)
                             st.session_state.messages.append({"role": "assistant", "content": error_message})
-
