@@ -6,9 +6,10 @@ import re
 import io
 import google.generativeai as genai
 from datetime import datetime
+import openpyxl # Although not directly imported, it's required by pandas for Excel operations
 
 # ==============================================================================
-# CẤU HÌNH TRANG VÀ BIẾN TOÀN CỤC
+# PAGE CONFIGURATION AND GLOBAL VARIABLES
 # ==============================================================================
 st.set_page_config(
     page_title="Thẩm định Phương án Kinh doanh",
@@ -17,34 +18,36 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# CÁC HÀM TIỆN ÍCH
+# UTILITY FUNCTIONS
 # ==============================================================================
 
 def format_currency(value):
-    """Định dạng số thành chuỗi tiền tệ với dấu chấm phân cách hàng nghìn."""
+    """Formats a number into a currency string with dot separators for thousands."""
     if isinstance(value, (int, float)):
         return f"{value:,.0f}".replace(",", ".")
     return value
 
 def safe_float(value):
-    """Chuyển đổi giá trị sang float một cách an toàn, trả về 0.0 nếu lỗi."""
+    """Safely converts a value to float, returning 0.0 on error."""
     try:
         if isinstance(value, str):
+            # Remove all non-digit characters except for the decimal point
             value = re.sub(r'[^\d.]', '', value)
         return float(value)
     except (ValueError, TypeError):
         return 0.0
 
 def extract_data_from_docx(uploaded_file):
-    """Trích xuất dữ liệu từ file .docx được tải lên."""
+    """Extracts data from the uploaded .docx file."""
     try:
         document = Document(uploaded_file)
         full_text = "\n".join([para.text for para in document.paragraphs])
-        
+
+        # Use more robust regex patterns to find the data
         data = {
-            'ho_ten': re.search(r"Họ và tên:\s*(.*?)\s*\.   Sinh ngày:", full_text).group(1).strip() if re.search(r"Họ và tên:\s*(.*?)\s*\.   Sinh ngày:", full_text) else "Không tìm thấy",
+            'ho_ten': re.search(r"Họ và tên:\s*(.*?)\s*\. Sinh ngày:", full_text).group(1).strip() if re.search(r"Họ và tên:\s*(.*?)\s*\. Sinh ngày:", full_text) else "Không tìm thấy",
             'cccd': re.search(r"CCCD số:\s*(\d+)", full_text).group(1).strip() if re.search(r"CCCD số:\s*(\d+)", full_text) else "Không tìm thấy",
-            'dia_chi': re.search(r"Nơi cư trú:\s*([^,]+,[^,]+,[^,]+)", full_text).group(1).strip() if re.search(r"Nơi cư trú:\s*([^,]+,[^,]+,[^,]+)", full_text) else "Không tìm thấy",
+            'dia_chi': re.search(r"Nơi cư trú:\s*(.*?)(?=\s*,Số điện thoại:)", full_text).group(1).strip() if re.search(r"Nơi cư trú:\s*(.*?)(?=\s*,Số điện thoại:)", full_text) else "Không tìm thấy",
             'sdt': re.search(r"Số điện thoại:\s*([\d\s,]+)", full_text).group(1).split(',')[0].strip() if re.search(r"Số điện thoại:\s*([\d\s,]+)", full_text) else "Không tìm thấy",
             'muc_dich_vay': re.search(r"Mục đích vay:\s*(.*)", full_text).group(1).strip() if re.search(r"Mục đích vay:\s*(.*)", full_text) else "Kinh doanh vật liệu xây dựng",
             'tong_chi_phi': re.search(r"TỔNG CỘNG,\s*([\d.,]+)", full_text.replace("\n", " ")).group(1).strip() if re.search(r"TỔNG CỘNG,\s*([\d.,]+)", full_text.replace("\n", " ")) else "7827181642",
@@ -62,21 +65,24 @@ def extract_data_from_docx(uploaded_file):
         return None
 
 def generate_repayment_schedule(principal, annual_rate, term_months):
-    """Tạo bảng kế hoạch trả nợ chi tiết."""
-    if term_months <= 0 or principal <= 0:
+    """Creates a detailed loan repayment schedule."""
+    if term_months <= 0 or principal <= 0 or annual_rate < 0:
         return pd.DataFrame()
-        
+
     monthly_rate = (annual_rate / 100) / 12
     principal_payment = principal / term_months
-    
+
     schedule = []
     remaining_balance = principal
-    
+
     for i in range(1, term_months + 1):
         interest_payment = remaining_balance * monthly_rate
         total_payment = principal_payment + interest_payment
         remaining_balance -= principal_payment
-        
+        # Ensure remaining balance doesn't go below zero due to float precision
+        if remaining_balance < 0:
+            remaining_balance = 0
+
         schedule.append({
             'Kỳ': i,
             'Dư nợ đầu kỳ': remaining_balance + principal_payment,
@@ -85,12 +91,12 @@ def generate_repayment_schedule(principal, annual_rate, term_months):
             'Tổng trả': total_payment,
             'Dư nợ cuối kỳ': remaining_balance
         })
-        
+
     df = pd.DataFrame(schedule)
     return df
 
 def generate_report_text():
-    """Tạo nội dung văn bản để xuất báo cáo."""
+    """Generates the text content for the report export."""
     report_data = st.session_state.report_data
     schedule_df = st.session_state.schedule_df
 
@@ -140,7 +146,7 @@ V. PHÂN TÍCH TỪ AI (NẾU CÓ)
     return text
 
 # ==============================================================================
-# KHỞI TẠO SESSION STATE
+# SESSION STATE INITIALIZATION
 # ==============================================================================
 
 if 'data_extracted' not in st.session_state:
@@ -154,20 +160,20 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # ==============================================================================
-# GIAO DIỆN - SIDEBAR
+# UI - SIDEBAR
 # ==============================================================================
 
 with st.sidebar:
     st.header("Thiết lập")
-    
+
     api_key = st.text_input("🔑 Nhập Gemini API Key", type="password", help="API Key của bạn sẽ không được lưu trữ.")
-    
+
     uploaded_file = st.file_uploader(
         "Tải lên Phương án Kinh doanh (.docx)",
         type=['docx'],
         accept_multiple_files=False
     )
-    
+
     if uploaded_file and not st.session_state.data_extracted:
         with st.spinner('Đang trích xuất dữ liệu từ file...'):
             extracted_data = extract_data_from_docx(uploaded_file)
@@ -189,6 +195,7 @@ with st.sidebar:
                 st.session_state.full_text = extracted_data.get('full_text', '')
                 st.session_state.data_extracted = True
                 st.success("Trích xuất dữ liệu thành công!")
+                st.rerun() # Rerun to update the main page with extracted data
 
     if st.session_state.data_extracted:
         st.download_button(
@@ -198,12 +205,18 @@ with st.sidebar:
             mime='text/plain',
         )
 
-    if st.button("🗑️ Xóa cuộc trò chuyện"):
+    if st.button("🗑️ Xóa dữ liệu & Trò chuyện"):
+        # Reset all relevant session state keys
+        st.session_state.data_extracted = False
+        st.session_state.report_data = {}
+        st.session_state.schedule_df = pd.DataFrame()
+        st.session_state.ai_analysis = ""
+        st.session_state.full_text = ""
         st.session_state.messages = []
         st.rerun()
 
 # ==============================================================================
-# GIAO DIỆN - TRANG CHÍNH
+# UI - MAIN PAGE
 # ==============================================================================
 
 st.title("📊 Thẩm định Phương án Kinh doanh của Khách hàng")
@@ -224,14 +237,14 @@ else:
     with col2:
         with st.expander("💰 **Thông tin khoản vay**", expanded=True):
             st.session_state.report_data['muc_dich_vay'] = st.text_input("Mục đích vay", value=st.session_state.report_data.get('muc_dich_vay'))
-            st.session_state.report_data['von_vay'] = st.number_input("Số tiền vay (VND)", min_value=0, value=int(st.session_state.report_data.get('von_vay')), step=1000000, format="%d")
-            st.session_state.report_data['lai_suat'] = st.number_input("Lãi suất (%/năm)", min_value=0.0, value=st.session_state.report_data.get('lai_suat'), step=0.1, format="%.1f")
-            st.session_state.report_data['thoi_gian_vay'] = st.number_input("Thời gian vay (tháng)", min_value=1, value=st.session_state.report_data.get('thoi_gian_vay'), step=1, format="%d")
+            st.session_state.report_data['von_vay'] = st.number_input("Số tiền vay (VND)", min_value=0, value=int(st.session_state.report_data.get('von_vay', 0)), step=1000000, format="%d")
+            st.session_state.report_data['lai_suat'] = st.number_input("Lãi suất (%/năm)", min_value=0.0, value=st.session_state.report_data.get('lai_suat', 0.0), step=0.1, format="%.1f")
+            st.session_state.report_data['thoi_gian_vay'] = st.number_input("Thời gian vay (tháng)", min_value=1, value=int(st.session_state.report_data.get('thoi_gian_vay', 1)), step=1, format="%d")
 
     st.markdown("---")
-    
+
     st.subheader("📈 Phân tích tài chính và Trực quan hóa")
-    
+
     total_cost = st.session_state.report_data.get('tong_chi_phi', 0)
     total_revenue = st.session_state.report_data.get('tong_doanh_thu', 0)
     loan_amount = st.session_state.report_data.get('von_vay', 0)
@@ -241,14 +254,14 @@ else:
     profit_margin = (profit / total_revenue) * 100 if total_revenue > 0 else 0
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
-    metric_col1.metric("Lợi nhuận (1 vòng quay)", f"{format_currency(profit)} VND", delta=f"{format_currency(profit)} VND")
+    metric_col1.metric("Lợi nhuận (1 vòng quay)", f"{format_currency(profit)} VND", delta=f"{format_currency(profit)} VND" if profit != 0 else None)
     metric_col2.metric("Tỷ suất lợi nhuận", f"{profit_margin:.2f}%")
     metric_col3.metric("Tổng chi phí (1 vòng quay)", f"{format_currency(total_cost)} VND")
 
     viz_col1, viz_col2 = st.columns(2)
     with viz_col1:
         st.markdown("##### Cơ cấu Doanh thu")
-        if total_revenue > 0:
+        if total_revenue > 0 and profit > 0:
             fig_pie = go.Figure(data=[go.Pie(
                 labels=['Tổng chi phí', 'Lợi nhuận'],
                 values=[total_cost, profit],
@@ -258,7 +271,7 @@ else:
             fig_pie.update_layout(showlegend=True)
             st.plotly_chart(fig_pie, use_container_width=True)
         else:
-            st.warning("Không có dữ liệu doanh thu để vẽ biểu đồ.")
+            st.warning("Không có đủ dữ liệu doanh thu và lợi nhuận để vẽ biểu đồ.")
 
     with viz_col2:
         st.markdown("##### Cơ cấu Nguồn vốn")
@@ -274,7 +287,7 @@ else:
             st.warning("Không có dữ liệu vốn để vẽ biểu đồ.")
 
     st.markdown("---")
-    
+
     st.subheader("🗓️ Kế hoạch trả nợ dự kiến")
     schedule_df = generate_repayment_schedule(
         st.session_state.report_data['von_vay'],
@@ -285,8 +298,8 @@ else:
 
     if not schedule_df.empty:
         display_df = schedule_df.copy()
-        for col in display_df.columns:
-            if display_df[col].dtype == 'float64':
+        for col in ['Dư nợ đầu kỳ', 'Gốc trả', 'Lãi trả', 'Tổng trả', 'Dư nợ cuối kỳ']:
+             if col in display_df.columns:
                 display_df[col] = display_df[col].apply(format_currency)
         st.dataframe(display_df, use_container_width=True)
 
@@ -305,14 +318,13 @@ else:
         st.warning("Vui lòng nhập đầy đủ thông tin khoản vay để tạo kế hoạch trả nợ.")
 
     st.markdown("---")
-    
+
     st.subheader("🤖 Phân tích từ Trợ lý AI")
     if not api_key:
         st.warning("Vui lòng nhập Gemini API Key ở thanh bên trái để sử dụng các tính năng AI.")
     else:
         try:
             genai.configure(api_key=api_key)
-            # *** SỬA LỖI: Cập nhật tên model ổn định hơn ***
             model = genai.GenerativeModel('gemini-1.5-flash-latest')
         except Exception as e:
             st.error(f"Lỗi khi cấu hình Gemini: {e}")
@@ -332,7 +344,7 @@ else:
                     1.  **Điểm mạnh:** 2-3 gạch đầu dòng về các ưu điểm của phương án.
                     2.  **Điểm yếu:** 2-3 gạch đầu dòng về các nhược điểm hoặc điểm cần làm rõ.
                     3.  **Rủi ro:** 2-3 gạch đầu dòng về các rủi ro tiềm ẩn.
-                    4.  **Đề xuất cuối cùng:** In đậm và chỉ ghi một trong hai cụm từ: "NÊN CHO VAY" hoặc "KHÔNG NÊN CHO VAY".
+                    4.  **Đề xuất cuối cùng:** In đậm và chỉ ghi một trong hai cụm từ: "NÊN CHO VAY" hoặc "CẦN XEM XÉT THÊM".
                     """
                     try:
                         response = model.generate_content(prompt)
