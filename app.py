@@ -304,7 +304,7 @@ else:
             st.session_state.report_data['lai_suat'] = st.number_input("Lãi suất (%/năm)", min_value=0.0, value=st.session_state.report_data.get('lai_suat', 0.0), step=0.1, format="%.1f")
             st.session_state.report_data['thoi_gian_vay'] = st.number_input("Thời gian vay (tháng)", min_value=1, value=int(st.session_state.report_data.get('thoi_gian_vay', 1)), step=1, format="%d")
             st.session_state.report_data['nguon_tra_no'] = st.text_input("Nguồn trả nợ", value=st.session_state.report_data.get('nguon_tra_no', ''))
-            st.session_state.report_data['tai_san_bao_dam'] = st.text_area("Tài sản bảo đảm", value=st.session_state.report_data.get('tai_san_bao_dam', ''))
+            st.session_state.report_data['tai_san_bao_dam'] = st.text_area("Tổng tài sản đảm bảo", value=st.session_state.report_data.get('tai_san_bao_dam', ''))
             st.session_state.report_data['doanh_thu_phuong_an'] = st.number_input("Doanh thu của phương án (VND)", min_value=0, value=int(st.session_state.report_data.get('doanh_thu_phuong_an', 0)), step=1000000, format="%d")
             st.session_state.report_data['chi_phi_kinh_doanh'] = st.number_input("Chi phí kinh doanh (VND)", min_value=0, value=int(st.session_state.report_data.get('chi_phi_kinh_doanh', 0)), step=1000000, format="%d")
             st.session_state.report_data['chenh_lech_thu_chi'] = st.number_input("Chênh lệch thu chi (VND)", min_value=0, value=int(st.session_state.report_data.get('chenh_lech_thu_chi', 0)), step=1000000, format="%d")
