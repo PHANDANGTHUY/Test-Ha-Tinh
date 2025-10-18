@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import docx
 import re
@@ -61,8 +62,7 @@ def extract_info_from_docx(file):
     
     indicators = {
         "Vòng quay vốn": cycles_per_year,
-        "Chênh lệch thu chi": profit,
-        # Add more as needed
+        "Chênh lệch thu chi": profit
     }
     
     info = {
@@ -106,84 +106,165 @@ def generate_repayment_schedule(loan_amount, interest_rate, loan_term_months):
     df = pd.DataFrame(schedule)
     return df
 
-# Streamlit App
-st.title("Chương trình Thẩm định Phương án Kinh doanh")
+# Streamlit App with improved UI
+st.set_page_config(page_title="Thẩm định Phương án Kinh doanh", layout="wide")
+st.markdown(
+    """
+    <style>
+    .main {background-color: #f0f2f6;}
+    .stButton>button {background-color: #4CAF50; color: white; border-radius: 5px;}
+    .stTextInput, .stNumberInput {border: 1px solid #ddd; border-radius: 5px;}
+    .sidebar .sidebar-content {background-color: #ffffff; border-right: 1px solid #ddd;}
+    .block-container {padding: 2rem;}
+    .stExpander {border: 1px solid #ddd; border-radius: 5px; margin-bottom: 1rem;}
+    </style>
+    """, unsafe_allow_html=True
+)
 
-# API Key input
-api_key = st.text_input("Nhập API Key cho Gemini:", type="password")
-if api_key:
-    genai.configure(api_key=api_key)
+# Sidebar for API Key and File Upload
+with st.sidebar:
+    st.header("Cấu hình & Tải file")
+    api_key = st.text_input("Nhập API Key cho Gemini:", type="password")
+    if api_key:
+        genai.configure(api_key=api_key)
+    
+    uploaded_file = st.file_uploader("Tải file phương án vay vốn (.docx)", type="docx")
 
-# Upload file
-uploaded_file = st.file_uploader("Upload file phương án vay vốn (.docx)", type="docx")
+# Main content
+st.title("📊 Chương trình Thẩm định Phương án Kinh doanh")
+st.markdown("---")
 
 if uploaded_file:
-    info, full_text = extract_info_from_docx(uploaded_file)
+    with st.container():
+        st.header("📋 Thông tin trích xuất từ hồ sơ")
+        info, full_text = extract_info_from_docx(uploaded_file)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Thông tin khách hàng")
+            st.info(f"**Họ và tên**: {info['Họ và tên']}")
+            st.info(f"**CCCD**: {info['CCCD']}")
+            st.info(f"**Địa chỉ**: {info['Địa chỉ']}")
+            st.info(f"**Số điện thoại**: {info['Số điện thoại']}")
+        
+        with col2:
+            st.subheader("Thông tin khoản vay")
+            st.info(f"**Mục đích vay**: {info['Mục đích vay']}")
+            st.info(f"**Tổng nhu cầu vốn**: {info['Tổng nhu cầu vốn']:,} đồng")
+            st.info(f"**Vốn đối ứng**: {info['Vốn đối ứng']:,} đồng")
+            st.info(f"**Số tiền vay**: {info['Số tiền vay']:,} đồng")
+            st.info(f"**Lãi suất**: {info['Lãi suất']}%/năm")
+            st.info(f"**Thời gian vay**: {info['Thời gian vay (tháng)']} tháng")
+        
+        with st.expander("Chỉ tiêu tài chính"):
+            st.write(f"**Doanh thu**: {info['Doanh thu']:,} đồng")
+            st.write(f"**Chi phí**: {info['Chi phí']:,} đồng")
+            st.write(f"**Lợi nhuận**: {info['Lợi nhuận']:,} đồng")
+            st.write(f"**Vòng quay vốn**: {info['Chỉ tiêu tài chính']['Vòng quay vốn']:.2f} vòng/năm")
+            st.write(f"**Chênh lệch thu chi**: {info['Chỉ tiêu tài chính']['Chênh lệch thu chi']:,} đồng")
     
-    # Display extracted info
-    st.subheader("Thông tin trích xuất")
-    for key, value in info.items():
-        if isinstance(value, dict):
-            st.write(f"{key}:")
-            for subkey, subvalue in value.items():
-                st.write(f"  - {subkey}: {subvalue}")
-        else:
-            st.write(f"{key}: {value}")
-    
-    # Manual adjustment
-    st.subheader("Điều chỉnh thủ công (nếu cần)")
-    info["Họ và tên"] = st.text_input("Họ và tên", info["Họ và tên"])
-    info["CCCD"] = st.text_input("CCCD", info["CCCD"])
-    info["Địa chỉ"] = st.text_input("Địa chỉ", info["Địa chỉ"])
-    info["Số điện thoại"] = st.text_input("Số điện thoại", info["Số điện thoại"])
-    info["Mục đích vay"] = st.text_input("Mục đích vay", info["Mục đích vay"])
-    info["Tổng nhu cầu vốn"] = st.number_input("Tổng nhu cầu vốn", value=info["Tổng nhu cầu vốn"])
-    info["Vốn đối ứng"] = st.number_input("Vốn đối ứng", value=info["Vốn đối ứng"])
-    info["Số tiền vay"] = st.number_input("Số tiền vay", value=info["Số tiền vay"])
-    info["Lãi suất"] = st.number_input("Lãi suất (%)", value=info["Lãi suất"])
-    info["Thời gian vay (tháng)"] = st.number_input("Thời gian vay (tháng)", value=info["Thời gian vay (tháng)"])
-    
+    # Manual adjustment section
+    with st.container():
+        st.header("✏️ Điều chỉnh thông tin (nếu cần)")
+        with st.form("manual_adjustment"):
+            col1, col2 = st.columns(2)
+            with col1:
+                name = st.text_input("Họ và tên", info["Họ và tên"])
+                cccd = st.text_input("CCCD", info["CCCD"])
+                address = st.text_input("Địa chỉ", info["Địa chỉ"])
+                phone = st.text_input("Số điện thoại", info["Số điện thoại"])
+                purpose = st.text_input("Mục đích vay", info["Mục đích vay"])
+            
+            with col2:
+                total_capital = st.number_input("Tổng nhu cầu vốn", value=info["Tổng nhu cầu vốn"])
+                own_capital = st.number_input("Vốn đối ứng", value=info["Vốn đối ứng"])
+                loan_amount = st.number_input("Số tiền vay", value=info["Số tiền vay"])
+                interest_rate = st.number_input("Lãi suất (%)", value=info["Lãi suất"])
+                loan_term = st.number_input("Thời gian vay (tháng)", value=info["Thời gian vay (tháng)"])
+            
+            submit = st.form_submit_button("Cập nhật thông tin")
+            if submit:
+                info.update({
+                    "Họ và tên": name,
+                    "CCCD": cccd,
+                    "Địa chỉ": address,
+                    "Số điện thoại": phone,
+                    "Mục đích vay": purpose,
+                    "Tổng nhu cầu vốn": total_capital,
+                    "Vốn đối ứng": own_capital,
+                    "Số tiền vay": loan_amount,
+                    "Lãi suất": interest_rate,
+                    "Thời gian vay (tháng)": loan_term
+                })
+                st.success("Thông tin đã được cập nhật!")
+
     # Repayment schedule
-    st.subheader("Kế hoạch trả nợ")
-    df_schedule = generate_repayment_schedule(info["Số tiền vay"], info["Lãi suất"]/100, info["Thời gian vay (tháng)"])
-    st.dataframe(df_schedule)
-    
-    # Download Excel
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_schedule.to_excel(writer, index=False)
-    st.download_button("Tải xuống bảng kế hoạch trả nợ (Excel)", output.getvalue(), file_name="ke_hoach_tra_no.xlsx")
+    with st.container():
+        st.header("📅 Kế hoạch trả nợ")
+        df_schedule = generate_repayment_schedule(info["Số tiền vay"], info["Lãi suất"]/100, info["Thời gian vay (tháng)"])
+        st.dataframe(df_schedule.style.format({
+            "Gốc phải trả": "{:,.0f}",
+            "Lãi phải trả": "{:,.0f}",
+            "Tổng phải trả": "{:,.0f}",
+            "Dư nợ còn lại": "{:,.0f}"
+        }))
+        
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_schedule.to_excel(writer, index=False)
+        st.download_button(
+            label="📥 Tải xuống bảng kế hoạch trả nợ (Excel)",
+            data=output.getvalue(),
+            file_name="ke_hoach_tra_no.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
     
     # Gemini Analysis
     if api_key:
-        st.subheader("Phân tích bằng Gemini")
-        model = GenerativeModel('gemini-1.5-flash')
-        prompt = f"Phân tích phương án sử dụng vốn sau và đề xuất cho vay hay không: {full_text}"
-        response = model.generate_content(prompt)
-        st.write(response.text)
-        
-        # Recommendation
-        rec_prompt = f"Dựa trên phân tích, đề xuất cho vay hay không cho vay? Lý do: {response.text}"
-        rec_response = model.generate_content(rec_prompt)
-        st.write(rec_response.text)
+        with st.container():
+            st.header("🤖 Phân tích bằng Gemini 2.0 Flash")
+            with st.expander("Xem phân tích chi tiết"):
+                model = GenerativeModel('gemini-2.0-flash')
+                prompt = f"Phân tích phương án sử dụng vốn sau và đề xuất cho vay hay không: {full_text}"
+                response = model.generate_content(prompt)
+                st.markdown(response.text)
+                
+                rec_prompt = f"Dựa trên phân tích, đề xuất cho vay hay không cho vay? Lý do: {response.text}"
+                rec_response = model.generate_content(rec_prompt)
+                st.markdown("**Đề xuất**: " + rec_response.text)
     
     # Chatbox with Gemini
-    st.subheader("Chat với Gemini về phương án")
-    if "chat_session" not in st.session_state and api_key:
-        model = GenerativeModel('gemini-1.5-flash')
-        st.session_state.chat_session = model.start_chat(history=[])
+    if api_key:
+        with st.container():
+            st.header("💬 Chat với Gemini 2.0 Flash về phương án")
+            if "chat_session" not in st.session_state:
+                model = GenerativeModel('gemini-2.0-flash')
+                st.session_state.chat_session = model.start_chat(history=[])
+            
+            with st.expander("Cuộc trò chuyện"):
+                for message in st.session_state.chat_session.history:
+                    role = "Người dùng" if message.role == "user" else "Gemini"
+                    st.write(f"**{role}**: {message.parts[0].text}")
+                
+                user_input = st.text_input("Hỏi về phương án:", key="chat_input")
+                if user_input:
+                    response = st.session_state.chat_session.send_message(user_input)
+                    st.write(f"**Người dùng**: {user_input}")
+                    st.write(f"**Gemini**: {response.text}")
     
-    if "chat_session" in st.session_state:
-        user_input = st.chat_input("Hỏi về phương án:")
-        if user_input:
-            response = st.session_state.chat_session.send_message(user_input)
-            st.chat_message("user").write(user_input)
-            st.chat_message("assistant").write(response.text)
-    
-    # Export info
-    st.subheader("Xuất thông tin dự án và kết quả phân tích")
-    export_data = pd.DataFrame(list(info.items()), columns=["Thông tin", "Giá trị"])
-    output_export = io.BytesIO()
-    with pd.ExcelWriter(output_export, engine='openpyxl') as writer:
-        export_data.to_excel(writer, index=False)
-    st.download_button("Tải xuống thông tin dự án (Excel)", output_export.getvalue(), file_name="thong_tin_du_an.xlsx")
+    # Export project info
+    with st.container():
+        st.header("📑 Xuất thông tin dự án")
+        export_data = pd.DataFrame(list(info.items()), columns=["Thông tin", "Giá trị"])
+        output_export = io.BytesIO()
+        with pd.ExcelWriter(output_export, engine='openpyxl') as writer:
+            export_data.to_excel(writer, index=False)
+        st.download_button(
+            label="📥 Tải xuống thông tin dự án (Excel)",
+            data=output_export.getvalue(),
+            file_name="thong_tin_du_an.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+else:
+    st.info("Vui lòng tải lên file .docx để bắt đầu thẩm định.")
+```
