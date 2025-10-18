@@ -6,3 +6,9 @@ matplotlib
 google-generativeai
 fpdf
 xlsxwriter
+streamlit
+pandas
+plotly
+python-docx
+google-generativeai
+openpyxl
