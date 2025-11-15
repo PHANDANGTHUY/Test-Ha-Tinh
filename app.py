@@ -3,616 +3,943 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from docx import Document
-import re
-import numpy_financial as npf
 import google.generativeai as genai
 from io import BytesIO
+import re
 from datetime import datetime
-# ======================================================================================
-# CẤU HÌNH TRANG VÀ KHỞI TẠO
-# ======================================================================================
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+# Cấu hình trang
 st.set_page_config(
     page_title="Hệ thống Thẩm định Phương án Kinh doanh",
     page_icon="🏦",
-    layout="wide",
+    layout="wide"
 )
-st.title("🏦 Hệ thống Thẩm định Phương án Kinh doanh")
-st.markdown("---")
-# Khởi tạo session state để lưu trữ dữ liệu giữa các lần re-run
-if 'data_extracted' not in st.session_state:
-    st.session_state.data_extracted = False
-if 'docx_text' not in st.session_state:
-    st.session_state.docx_text = ""
+
+# CSS tùy chỉnh
+st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        padding: 1rem;
+        background: linear-gradient(90deg, #e3f2fd 0%, #bbdefb 100%);
+        border-radius: 10px;
+        margin-bottom: 2rem;
+    }
+    .sub-header {
+        font-size: 1.3rem;
+        font-weight: 600;
+        color: #0d47a1;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+        border-left: 4px solid #1f77b4;
+        padding-left: 10px;
+    }
+    .metric-card {
+        background-color: #f5f5f5;
+        padding: 1rem;
+        border-radius: 8px;
+        border: 1px solid #ddd;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        background-color: #e3f2fd;
+        border-radius: 5px 5px 0 0;
+        padding: 10px 20px;
+        font-weight: 600;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #1f77b4;
+        color: white;
+    }
+    .api-note {
+        background-color: #fff3cd;
+        border: 1px solid #ffc107;
+        border-radius: 5px;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Khởi tạo session state
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
-# ======================================================================================
-# CÁC HÀM HỖ TRỢ (HELPERS)
-# ======================================================================================
-def format_currency(value, decimal_places=0):
-    """Định dạng số thành chuỗi tiền tệ với dấu chấm phân cách hàng nghìn và dấu phẩy thập phân."""
-    if value is None or not isinstance(value, (int, float)):
-        return "0"
-    # Format với dấu phẩy phân cách nghìn (Python mặc định)
-    formatted = f"{value:,.{decimal_places}f}"
-    # Đổi dấu: phẩy (nghìn) -> chấm, chấm (thập phân) -> phẩy
-    formatted = formatted.replace(",", "TEMP").replace(".", ",").replace("TEMP", ".")
-    return formatted
+if 'data_changed' not in st.session_state:
+    st.session_state.data_changed = False
+if 'uploaded_content' not in st.session_state:
+    st.session_state.uploaded_content = ""
 
-def extract_text_from_docx(docx_file):
-    """Trích xuất toàn bộ văn bản từ file .docx."""
-    try:
-        doc = Document(docx_file)
-        full_text = [para.text for para in doc.paragraphs]
-        return "\n".join(full_text)
-    except Exception as e:
-        st.error(f"Lỗi khi đọc file .docx: {e}")
-        return ""
-def parse_info_from_text(text):
-    """
-    Phân tích văn bản để trích xuất thông tin ban đầu (best-effort).
-    Hàm này sử dụng regex đơn giản và giả định cấu trúc file.
-    """
-    info = {}
-   
-    # Hàm tìm kiếm an toàn
-    def safe_search(pattern, text, group=1, default=None, is_numeric=False):
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            result = match.group(group).strip()
-            if is_numeric:
-                try:
-                    # Loại bỏ ký tự không phải số (giữ lại dấu phẩy/chấm)
-                    cleaned_result = re.sub(r'[^\d,.]', '', result)
-                    # Chuẩn hóa về định dạng số của Python
-                    cleaned_result = cleaned_result.replace('.', '').replace(',', '.')
-                    return float(cleaned_result)
-                except (ValueError, IndexError):
-                    return default
-            return result
-        return default
-    # Thông tin khách hàng (không có trong file, giữ mặc định)
-    info['ho_ten'] = safe_search(r"Họ và tên:\s*(.*?)\s*\.", text) or "Chưa rõ"
-    info['cccd'] = safe_search(r"CCCD số:\s*(\d+)", text) or ""
-    info['dia_chi'] = safe_search(r"Nơi cư trú:\s*(.*?)(?:,|$|\n)", text) or "Chưa rõ"
-    info['sdt'] = safe_search(r"Số điện thoại:\s*(\d+)", text) or ""
-    # Thông tin phương án vay
-    info['muc_dich_vay'] = safe_search(r"Mục đích vay:\s*(.*?)\n", text) or "Kinh doanh vật liệu xây dựng"
-    info['tong_nhu_cau_von'] = safe_search(r"- Chi phí kinh doanh:\s*([\d.,]+)\s*đồng", text, is_numeric=True, default=0)
-    info['von_doi_ung'] = safe_search(r"Vốn đối ứng.*?đồng,([\d.,]+)", text, is_numeric=True, default=0)  # Không có trong file, giữ default
-    info['so_tien_vay'] = safe_search(r"Chênh lệch thu chi:\s*([\d.,]+)\s*đồng", text, is_numeric=True, default=0)  # Sử dụng chênh lệch làm proxy nếu cần
-    info['lai_suat'] = safe_search(r"Lãi suất đề nghị:\s*([\d.,]+)%/năm", text, is_numeric=True, default=5.0)
-    info['thoi_gian_vay'] = safe_search(r"Thời hạn cho vay:\s*(\d+)\s*tháng", text, is_numeric=True, default=3)
-    # Thông tin tài sản đảm bảo (không có chi tiết cụ thể)
-    info['tsdb_mo_ta'] = safe_search(r"Tài sản bảo đảm:\s*(.*?)(?=III\. Thông tin)", text) or "Chưa có mô tả"
-    info['tsdb_gia_tri'] = safe_search(r"Tổng tài sản đảm bảo:\s*([\d.,]+)", text, is_numeric=True, default=0)
-    # Trích xuất thêm thông tin cụ thể từ file
-    info['doanh_thu'] = safe_search(r"\+Doanh thu của phương án:\s*([\d.,]+)\s*đồng", text, is_numeric=True, default=0)
-    info['chi_phi'] = safe_search(r"\+  Chi phí kinh doanh:\s*([\d.,]+)\s*đồng", text, is_numeric=True, default=0)
-    info['chenh_lech_thu_chi'] = safe_search(r"\+  Chênh lệch thu chi:\s*([\d.,]+)\s*đồng", text, is_numeric=True, default=0)
-    info['nguon_tra_no'] = safe_search(r"- Từ nguồn thu của phương án kinh doanh:\s*([\d.,]+)đồng", text, is_numeric=True, default=0)
-    return info
-def calculate_repayment_schedule(principal, annual_rate, term_months):
-    """Tạo bảng kế hoạch trả nợ chi tiết."""
-    if not all([principal > 0, annual_rate > 0, term_months > 0]):
-        return pd.DataFrame()
-    monthly_rate = annual_rate / 12 / 100
-   
-    # Tính tiền gốc phải trả hàng tháng
-    principal_payment = principal / term_months
-   
-    schedule = []
-    remaining_balance = principal
-    for i in range(1, term_months + 1):
-        interest_payment = remaining_balance * monthly_rate
-        total_payment = principal_payment + interest_payment
-       
-        schedule.append({
-            "Kỳ trả nợ": i,
-            "Dư nợ đầu kỳ": remaining_balance,
-            "Gốc trả trong kỳ": principal_payment,
-            "Lãi trả trong kỳ": interest_payment,
-            "Tổng gốc và lãi": total_payment,
-            "Dư nợ cuối kỳ": remaining_balance - principal_payment,
-        })
-        remaining_balance -= principal_payment
-    df = pd.DataFrame(schedule)
-    # Đảm bảo dư nợ cuối kỳ cuối cùng là 0
-    df.loc[df.index[-1], 'Dư nợ cuối kỳ'] = 0
-    return df
-def generate_excel_download(df):
-    """Tạo file Excel từ DataFrame để tải xuống."""
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='LichTraNo')
-    processed_data = output.getvalue()
-    return processed_data
-def generate_report_docx(customer_info, loan_info, collateral_info, ratios, ai_analysis_1, ai_analysis_2):
-    """Tạo file Báo cáo Thẩm định dưới dạng .docx."""
-    doc = Document()
-    doc.add_heading('BÁO CÁO THẨM ĐỊNH SƠ BỘ', level=1)
-    doc.add_paragraph(f"Ngày lập báo cáo: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-    # Thông tin khách hàng
-    doc.add_heading('1. Thông tin khách hàng', level=2)
-    for key, value in customer_info.items():
-        doc.add_paragraph(f"{key.replace('_', ' ').title()}: {value}")
-   
-    # Thông tin khoản vay - Định dạng số với dấu chấm phân cách nghìn
-    doc.add_heading('2. Thông tin Phương án vay & Các chỉ số', level=2)
-    for key, value in loan_info.items():
-        # Kiểm tra nếu là số và không phải lãi suất/thời gian thì format
-        if isinstance(value, (int, float)) and 'lai_suat' not in key and 'thoi_gian' not in key:
-            val_str = format_currency(value)
-            unit = " VNĐ"
-        elif 'lai_suat' in key:
-            val_str = str(value)
-            unit = " %/năm"
-        elif 'thoi_gian' in key:
-            val_str = str(value)
-            unit = " tháng"
-        else:
-            val_str = str(value)
-            unit = ""
-        doc.add_paragraph(f"{key.replace('_', ' ').title()}: {val_str}{unit}")
+# Hàm định dạng số
+def format_number(num):
+    """Định dạng số với dấu phẩy phân cách hàng nghìn"""
+    if num == 0:
+        return "0"
+    return f"{int(num):,}"
+
+def parse_number(text):
+    """Chuyển đổi text có dấu phẩy thành số"""
+    if isinstance(text, (int, float)):
+        return float(text)
+    return float(str(text).replace(",", ""))
+
+# Hàm trích xuất thông tin từ file docx
+def extract_info_from_docx(file):
+    """Trích xuất thông tin từ file phương án kinh doanh"""
+    doc = Document(file)
+    full_text = "\n".join([para.text for para in doc.paragraphs])
     
-    for key, value in ratios.items():
-        doc.add_paragraph(f"{key}: {value}")
-   
+    # Lưu nội dung gốc vào session state
+    st.session_state.uploaded_content = full_text
+    
+    info = {
+        'ho_ten': '',
+        'cccd': '',
+        'dia_chi': '',
+        'sdt': '',
+        'muc_dich_vay': '',
+        'tong_nhu_cau_von': 0,
+        'von_doi_ung': 0,
+        'so_tien_vay': 0,
+        'lai_suat': 0,
+        'thoi_gian_vay': 0,
+        'mo_ta_tai_san': '',
+        'gia_tri_tai_san': 0,
+        'thu_nhap_thang': 0,
+        'chi_phi_thang': 0
+    }
+    
+    # Trích xuất họ tên
+    ho_ten_match = re.search(r'Họ và tên:\s*([^\-\n]+)', full_text)
+    if ho_ten_match:
+        info['ho_ten'] = ho_ten_match.group(1).strip()
+    
+    # Trích xuất CCCD
+    cccd_match = re.search(r'(?:CMND/CCCD|CCCD).*?:\s*(\d+)', full_text)
+    if cccd_match:
+        info['cccd'] = cccd_match.group(1).strip()
+    
+    # Trích xuất địa chỉ
+    dia_chi_match = re.search(r'Nơi cư trú:\s*([^\n]+)', full_text)
+    if dia_chi_match:
+        info['dia_chi'] = dia_chi_match.group(1).strip()
+    
+    # Trích xuất SĐT
+    sdt_match = re.search(r'Số điện thoại:\s*(\d+)', full_text)
+    if sdt_match:
+        info['sdt'] = sdt_match.group(1).strip()
+    
+    # Trích xuất mục đích vay
+    muc_dich_match = re.search(r'Mục đích vay:\s*([^\n]+)', full_text)
+    if muc_dich_match:
+        info['muc_dich_vay'] = muc_dich_match.group(1).strip()
+    
+    # Trích xuất tổng nhu cầu vốn
+    tong_von_match = re.search(r'Tổng nhu cầu vốn:\s*([\d.,]+)', full_text)
+    if tong_von_match:
+        info['tong_nhu_cau_von'] = float(tong_von_match.group(1).replace('.', '').replace(',', ''))
+    
+    # Trích xuất vốn đối ứng
+    von_du_match = re.search(r'Vốn đối ứng.*?:\s*([\d.,]+)', full_text)
+    if von_du_match:
+        info['von_doi_ung'] = float(von_du_match.group(1).replace('.', '').replace(',', ''))
+    
+    # Trích xuất số tiền vay
+    tien_vay_match = re.search(r'Vốn vay.*?số tiền:\s*([\d.,]+)', full_text)
+    if tien_vay_match:
+        info['so_tien_vay'] = float(tien_vay_match.group(1).replace('.', '').replace(',', ''))
+    
+    # Trích xuất lãi suất
+    lai_suat_match = re.search(r'Lãi suất:\s*([\d.,]+)', full_text)
+    if lai_suat_match:
+        info['lai_suat'] = float(lai_suat_match.group(1).replace(',', '.'))
+    
+    # Trích xuất thời gian vay
+    thoi_gian_match = re.search(r'Thời hạn vay:\s*(\d+)', full_text)
+    if thoi_gian_match:
+        info['thoi_gian_vay'] = int(thoi_gian_match.group(1))
+    
+    # Trích xuất giá trị tài sản
+    tai_san_match = re.search(r'Giá trị:?\s*([\d.,]+)\s*đồng', full_text)
+    if tai_san_match:
+        info['gia_tri_tai_san'] = float(tai_san_match.group(1).replace('.', '').replace(',', ''))
+    
+    # Trích xuất thu nhập tháng
+    thu_nhap_match = re.search(r'Tổng thu nhập.*?:\s*([\d.,]+)', full_text)
+    if thu_nhap_match:
+        info['thu_nhap_thang'] = float(thu_nhap_match.group(1).replace('.', '').replace(',', ''))
+    
+    # Trích xuất chi phí tháng
+    chi_phi_match = re.search(r'Tổng chi phí.*?:\s*([\d.,]+)', full_text)
+    if chi_phi_match:
+        info['chi_phi_thang'] = float(chi_phi_match.group(1).replace('.', '').replace(',', ''))
+    
+    # Mô tả tài sản
+    if 'Bất động sản' in full_text:
+        info['mo_ta_tai_san'] = 'Bất động sản (nhà và đất)'
+    
+    return info
+
+# Hàm tính toán kế hoạch trả nợ
+def calculate_repayment_schedule(so_tien_vay, lai_suat_nam, thoi_han_thang):
+    """Tính toán kế hoạch trả nợ theo phương thức trả gốc đều"""
+    if so_tien_vay <= 0 or thoi_han_thang <= 0:
+        return pd.DataFrame()
+    
+    lai_suat_thang = lai_suat_nam / 12 / 100
+    goc_tra_moi_ky = so_tien_vay / thoi_han_thang
+    
+    schedule = []
+    du_no = so_tien_vay
+    
+    for ky in range(1, thoi_han_thang + 1):
+        lai_tra = du_no * lai_suat_thang
+        tong_tra = goc_tra_moi_ky + lai_tra
+        du_no_cuoi = du_no - goc_tra_moi_ky
+        
+        schedule.append({
+            'Kỳ': ky,
+            'Dư nợ đầu kỳ': format_number(du_no),
+            'Gốc trả': format_number(goc_tra_moi_ky),
+            'Lãi trả': format_number(lai_tra),
+            'Tổng trả': format_number(tong_tra),
+            'Dư nợ cuối kỳ': format_number(max(0, du_no_cuoi))
+        })
+        
+        du_no = du_no_cuoi
+    
+    return pd.DataFrame(schedule)
+
+# Hàm tạo file Excel kế hoạch trả nợ
+def create_repayment_excel(df, customer_info):
+    """Tạo file Excel kế hoạch trả nợ"""
+    output = BytesIO()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Kế hoạch trả nợ"
+    
+    # Tiêu đề
+    ws['A1'] = "KẾ HOẠCH TRẢ NỢ"
+    ws['A1'].font = Font(size=16, bold=True)
+    ws['A1'].alignment = Alignment(horizontal='center')
+    ws.merge_cells('A1:F1')
+    
+    # Thông tin khách hàng
+    ws['A3'] = f"Khách hàng: {customer_info['ho_ten']}"
+    ws['A4'] = f"Số tiền vay: {customer_info['so_tien_vay']} VNĐ"
+    ws['A5'] = f"Lãi suất: {customer_info['lai_suat']}%/năm"
+    ws['A6'] = f"Thời hạn: {customer_info['thoi_gian_vay']} tháng"
+    
+    # Header bảng
+    headers = df.columns.tolist()
+    for col_num, header in enumerate(headers, 1):
+        cell = ws.cell(row=8, column=col_num, value=header)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="1F77B4", end_color="1F77B4", fill_type="solid")
+        cell.alignment = Alignment(horizontal='center')
+    
+    # Dữ liệu
+    for row_num, row_data in enumerate(df.values, 9):
+        for col_num, value in enumerate(row_data, 1):
+            ws.cell(row=row_num, column=col_num, value=value)
+    
+    wb.save(output)
+    output.seek(0)
+    return output
+
+# Hàm tạo báo cáo thẩm định
+def create_assessment_report(data):
+    """Tạo báo cáo thẩm định dưới dạng Word"""
+    doc = Document()
+    
+    # Tiêu đề
+    heading = doc.add_heading('BÁO CÁO THẨM ĐỊNH PHƯƠNG ÁN KINH DOANH', 0)
+    heading.alignment = 1  # Center
+    
+    # Thông tin khách hàng
+    doc.add_heading('I. THÔNG TIN KHÁCH HÀNG', 1)
+    doc.add_paragraph(f"Họ và tên: {data['ho_ten']}")
+    doc.add_paragraph(f"CCCD: {data['cccd']}")
+    doc.add_paragraph(f"Địa chỉ: {data['dia_chi']}")
+    doc.add_paragraph(f"Số điện thoại: {data['sdt']}")
+    
+    # Thông tin phương án vay
+    doc.add_heading('II. THÔNG TIN PHƯƠNG ÁN VAY', 1)
+    doc.add_paragraph(f"Mục đích vay: {data['muc_dich_vay']}")
+    doc.add_paragraph(f"Tổng nhu cầu vốn: {format_number(data['tong_nhu_cau_von'])} VNĐ")
+    doc.add_paragraph(f"Vốn đối ứng: {format_number(data['von_doi_ung'])} VNĐ")
+    doc.add_paragraph(f"Số tiền vay: {format_number(data['so_tien_vay'])} VNĐ")
+    doc.add_paragraph(f"Lãi suất: {data['lai_suat']}%/năm")
+    doc.add_paragraph(f"Thời gian vay: {data['thoi_gian_vay']} tháng")
+    
+    # Phân tích tài chính
+    doc.add_heading('III. PHÂN TÍCH TÀI CHÍNH', 1)
+    ty_le_vay = (data['so_tien_vay'] / data['tong_nhu_cau_von'] * 100) if data['tong_nhu_cau_von'] > 0 else 0
+    ty_le_doi_ung = (data['von_doi_ung'] / data['tong_nhu_cau_von'] * 100) if data['tong_nhu_cau_von'] > 0 else 0
+    
+    doc.add_paragraph(f"Tỷ lệ vay/Tổng nhu cầu vốn: {ty_le_vay:.2f}%")
+    doc.add_paragraph(f"Tỷ lệ vốn đối ứng: {ty_le_doi_ung:.2f}%")
+    
+    if data['gia_tri_tai_san'] > 0:
+        ltv = (data['so_tien_vay'] / data['gia_tri_tai_san'] * 100)
+        doc.add_paragraph(f"LTV (Loan to Value): {ltv:.2f}%")
+    
+    # Khả năng trả nợ
+    doc.add_heading('IV. ĐÁNH GIÁ KHẢ NĂNG TRẢ NỢ', 1)
+    doc.add_paragraph(f"Thu nhập hàng tháng: {format_number(data['thu_nhap_thang'])} VNĐ")
+    doc.add_paragraph(f"Chi phí hàng tháng: {format_number(data['chi_phi_thang'])} VNĐ")
+    
+    thu_nhap_rong = data['thu_nhap_thang'] - data['chi_phi_thang']
+    doc.add_paragraph(f"Thu nhập ròng: {format_number(thu_nhap_rong)} VNĐ")
+    
     # Tài sản đảm bảo
-    doc.add_heading('3. Thông tin tài sản đảm bảo', level=2)
-    doc.add_paragraph(f"Mô tả: {collateral_info['tsdb_mo_ta']}")
-    doc.add_paragraph(f"Tổng giá trị định giá: {format_currency(collateral_info['tsdb_gia_tri'])} VNĐ")
-    # Phân tích từ AI
-    doc.add_heading('4. Phân tích tự động bởi AI', level=2)
-    doc.add_heading('4.1. Phân tích từ dữ liệu trên ứng dụng', level=3)
-    doc.add_paragraph(ai_analysis_1 if ai_analysis_1 else "Chưa có phân tích.")
-    doc.add_heading('4.2. Phân tích từ file .docx của khách hàng', level=3)
-    doc.add_paragraph(ai_analysis_2 if ai_analysis_2 else "Chưa có phân tích.")
-    # Lưu vào buffer
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer.getvalue()
-# ======================================================================================
-# THANH BÊN (SIDEBAR)
-# ======================================================================================
+    doc.add_heading('V. TÀI SẢN ĐẢM BẢO', 1)
+    doc.add_paragraph(f"Mô tả: {data['mo_ta_tai_san']}")
+    doc.add_paragraph(f"Giá trị định giá: {format_number(data['gia_tri_tai_san'])} VNĐ")
+    
+    # Kết luận
+    doc.add_heading('VI. KẾT LUẬN', 1)
+    doc.add_paragraph(f"Ngày lập báo cáo: {datetime.now().strftime('%d/%m/%Y')}")
+    
+    # Lưu vào BytesIO
+    output = BytesIO()
+    doc.save(output)
+    output.seek(0)
+    return output
+
+# Header
+st.markdown('<div class="main-header">🏦 HỆ THỐNG THẨM ĐỊNH PHƯƠNG ÁN KINH DOANH</div>', unsafe_allow_html=True)
+
+# Sidebar
 with st.sidebar:
-    st.header("Cấu hình & Chức năng")
-   
-    # Nhập API Key
-    api_key = st.text_input("🔑 Gemini API Key", type="password", help="Nhập API Key của bạn để kích hoạt các tính năng AI.")
-   
-    st.markdown("---")
-   
-    # Chức năng xuất dữ liệu
-    st.subheader("Chức năng Xuất dữ liệu")
-    export_option = st.selectbox(
-        "Chọn loại báo cáo:",
-        ("--- Chọn ---", "Xuất Kế hoạch trả nợ (Excel)", "Xuất Báo cáo Thẩm định")
+    st.markdown("### ⚙️ Cấu hình")
+    
+    # Hướng dẫn lấy API Key
+    with st.expander("📖 Hướng dẫn lấy Gemini API Key (MIỄN PHÍ)", expanded=False):
+        st.markdown("""
+        **Các bước lấy API Key:**
+        
+        1. Truy cập: [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+        2. Đăng nhập bằng tài khoản Google
+        3. Nhấn nút **"Create API Key"**
+        4. Chọn project hoặc tạo mới
+        5. Copy API key và paste vào ô bên dưới
+        
+        ⚠️ **Lưu ý:**
+        - API key hoàn toàn MIỄN PHÍ
+        - Không chia sẻ API key với người khác
+        - Nếu key hết hạn, tạo key mới
+        """)
+    
+    # API Key input
+    api_key = st.text_input(
+        "🔑 Gemini API Key", 
+        type="password", 
+        help="Nhập API key của bạn để sử dụng tính năng AI",
+        placeholder="AIza..."
     )
-    execute_export = st.button("Thực hiện", use_container_width=True, disabled=(export_option == "--- Chọn ---"))
-# ======================================================================================
-# KHU VỰC CHỨC NĂNG CHÍNH (TABS)
-# ======================================================================================
+    
+    if api_key:
+        try:
+            genai.configure(api_key=api_key)
+            # Test API key
+            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            st.success("✅ API Key hợp lệ!")
+        except Exception as e:
+            if "API_KEY_INVALID" in str(e) or "expired" in str(e).lower():
+                st.error("❌ API Key không hợp lệ hoặc đã hết hạn!")
+                st.markdown("""
+                <div class='api-note'>
+                    <strong>💡 Giải pháp:</strong><br>
+                    1. Kiểm tra lại API key đã copy đúng chưa<br>
+                    2. Tạo API key mới tại: <a href='https://aistudio.google.com/app/apikey' target='_blank'>Google AI Studio</a><br>
+                    3. Đảm bảo đã bật Gemini API trong project
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.error(f"❌ Lỗi: {str(e)}")
+    else:
+        st.info("ℹ️ Nhập API key để sử dụng tính năng AI")
+    
+    st.markdown("---")
+    
+    # Chức năng xuất dữ liệu
+    st.markdown("### 📊 Xuất dữ liệu")
+    export_option = st.selectbox(
+        "Chọn loại xuất",
+        ["-- Chọn --", "Xuất Kế hoạch trả nợ (Excel)", "Xuất Báo cáo Thẩm định"]
+    )
+    
+    if export_option != "-- Chọn --":
+        if st.button("Thực hiện", type="primary"):
+            if 'customer_data' in st.session_state:
+                data = st.session_state.customer_data
+                
+                if export_option == "Xuất Kế hoạch trả nợ (Excel)":
+                    schedule = calculate_repayment_schedule(
+                        data['so_tien_vay'],
+                        data['lai_suat'],
+                        data['thoi_gian_vay']
+                    )
+                    if not schedule.empty:
+                        excel_file = create_repayment_excel(schedule, data)
+                        st.download_button(
+                            label="📥 Tải về Excel",
+                            data=excel_file,
+                            file_name=f"ke_hoach_tra_no_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                
+                elif export_option == "Xuất Báo cáo Thẩm định":
+                    report_file = create_assessment_report(data)
+                    st.download_button(
+                        label="📥 Tải về Báo cáo",
+                        data=report_file,
+                        file_name=f"bao_cao_tham_dinh_{datetime.now().strftime('%Y%m%d')}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    )
+            else:
+                st.warning("⚠️ Vui lòng nhập đầy đủ thông tin trước khi xuất dữ liệu!")
+
+# Tabs chính
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📝 Nhập liệu & Trích xuất thông tin",
+    "📝 Nhập liệu & Trích xuất",
     "📊 Phân tích Chỉ số & Dòng tiền",
     "📈 Biểu đồ Trực quan",
     "🤖 Phân tích bởi AI",
     "💬 Chatbot Hỗ trợ"
 ])
-# --------------------------------------------------------------------------------------
-# TAB 1: NHẬP LIỆU & TRÍCH XUẤT
-# --------------------------------------------------------------------------------------
+
+# Tab 1: Nhập liệu & Trích xuất
 with tab1:
-    st.header("Tải lên và Hiệu chỉnh Thông tin Phương án Kinh doanh")
-   
+    st.markdown('<div class="sub-header">📤 Upload File Phương án</div>', unsafe_allow_html=True)
+    
     uploaded_file = st.file_uploader(
-        "Tải lên file Phương án Kinh doanh của khách hàng (.docx)",
+        "Chọn file phương án kinh doanh (.docx)",
         type=['docx'],
-        accept_multiple_files=False
+        help="Upload file phương án kinh doanh của khách hàng"
     )
+    
+    # Khởi tạo dữ liệu mặc định
+    default_data = {
+        'ho_ten': '',
+        'cccd': '',
+        'dia_chi': '',
+        'sdt': '',
+        'muc_dich_vay': '',
+        'tong_nhu_cau_von': 0,
+        'von_doi_ung': 0,
+        'so_tien_vay': 0,
+        'lai_suat': 0.0,
+        'thoi_gian_vay': 0,
+        'mo_ta_tai_san': '',
+        'gia_tri_tai_san': 0,
+        'thu_nhap_thang': 0,
+        'chi_phi_thang': 0
+    }
+    
+    # Trích xuất nếu có file upload
     if uploaded_file is not None:
-        # Chỉ trích xuất lại nếu file thay đổi hoặc chưa trích xuất
-        if not st.session_state.data_extracted:
-            with st.spinner("Đang đọc và trích xuất thông tin từ file..."):
-                st.session_state.docx_text = extract_text_from_docx(uploaded_file)
-                parsed_data = parse_info_from_text(st.session_state.docx_text)
-                # Lưu dữ liệu đã trích xuất vào session_state
-                for key, value in parsed_data.items():
-                    st.session_state[key] = value
-                st.session_state.data_extracted = True
-                st.success("Trích xuất thông tin thành công! Vui lòng kiểm tra và hiệu chỉnh bên dưới.")
-   
-    # Sử dụng expander để nhóm các trường thông tin
-    with st.expander("Vùng 1 - Thông tin khách hàng", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.session_state.ho_ten = st.text_input("Họ và tên", value=st.session_state.get('ho_ten', ''))
-            st.session_state.cccd = st.text_input("CCCD/CMND", value=st.session_state.get('cccd', ''))
-        with col2:
-            st.session_state.sdt = st.text_input("Số điện thoại", value=st.session_state.get('sdt', ''))
-            st.session_state.dia_chi = st.text_input("Địa chỉ", value=st.session_state.get('dia_chi', ''))
-    with st.expander("Vùng 2 - Thông tin phương án vay", expanded=True):
-        st.session_state.muc_dich_vay = st.text_area("Mục đích vay", value=st.session_state.get('muc_dich_vay', ''))
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.session_state.tong_nhu_cau_von = st.number_input(
-                "Tổng nhu cầu vốn (VNĐ)",
-                min_value=0,
-                value=int(st.session_state.get('tong_nhu_cau_von', 0)),
-                step=1000000,
-                format="%d"
-            )
-            st.session_state.von_doi_ung = st.number_input(
-                "Vốn đối ứng (VNĐ)",
-                min_value=0,
-                value=int(st.session_state.get('von_doi_ung', 0)),
-                step=1000000,
-                format="%d"
-            )
-        with col2:
-            st.session_state.so_tien_vay = st.number_input(
-                "Số tiền vay (VNĐ)",
-                min_value=0,
-                value=int(st.session_state.get('so_tien_vay', 0)),
-                step=1000000,
-                format="%d"
-            )
-            st.session_state.lai_suat = st.number_input(
-                "Lãi suất (%/năm)",
-                min_value=0.0,
-                value=st.session_state.get('lai_suat', 5.0),
-                step=0.1,
-                format="%.1f"
-            )
-        with col3:
-             st.session_state.thoi_gian_vay = st.number_input(
-                "Thời gian vay (tháng)",
-                min_value=1,
-                value=int(st.session_state.get('thoi_gian_vay', 12)),
-                step=1
-            )
-           
-    with st.expander("Vùng 3 - Thông tin tài sản đảm bảo", expanded=True):
-        st.session_state.tsdb_mo_ta = st.text_area("Mô tả tài sản", value=st.session_state.get('tsdb_mo_ta', ''))
-        st.session_state.tsdb_gia_tri = st.number_input(
-            "Giá trị định giá (VNĐ)",
+        with st.spinner('🔄 Đang trích xuất thông tin từ file...'):
+            extracted_data = extract_info_from_docx(uploaded_file)
+            st.success('✅ Trích xuất thông tin thành công!')
+    else:
+        extracted_data = default_data
+    
+    st.markdown('<div class="sub-header">👤 Vùng 1 - Thông tin Khách hàng</div>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        ho_ten = st.text_input("Họ và tên", value=extracted_data['ho_ten'])
+        cccd = st.text_input("CCCD", value=extracted_data['cccd'])
+    with col2:
+        dia_chi = st.text_area("Địa chỉ", value=extracted_data['dia_chi'], height=100)
+        sdt = st.text_input("Số điện thoại", value=extracted_data['sdt'])
+    
+    st.markdown('<div class="sub-header">💰 Vùng 2 - Thông tin Phương án Vay</div>', unsafe_allow_html=True)
+    
+    muc_dich_vay = st.text_area("Mục đích vay", value=extracted_data['muc_dich_vay'], height=80)
+    
+    col3, col4, col5 = st.columns(3)
+    with col3:
+        tong_nhu_cau_von = st.number_input(
+            "Tổng nhu cầu vốn (VNĐ)",
             min_value=0,
-            value=int(st.session_state.get('tsdb_gia_tri', 0)),
+            value=int(extracted_data['tong_nhu_cau_von']),
             step=1000000,
             format="%d"
         )
-# Lấy dữ liệu từ session_state để tính toán
-so_tien_vay = st.session_state.get('so_tien_vay', 0)
-tong_nhu_cau_von = st.session_state.get('tong_nhu_cau_von', 0)
-von_doi_ung = st.session_state.get('von_doi_ung', 0)
-tsdb_gia_tri = st.session_state.get('tsdb_gia_tri', 0)
-lai_suat = st.session_state.get('lai_suat', 0.0)
-thoi_gian_vay = st.session_state.get('thoi_gian_vay', 0)
-# --------------------------------------------------------------------------------------
-# TAB 2: PHÂN TÍCH CHỈ SỐ & DÒNG TIỀN
-# --------------------------------------------------------------------------------------
+        st.caption(f"💵 {format_number(tong_nhu_cau_von)} VNĐ")
+    
+    with col4:
+        von_doi_ung = st.number_input(
+            "Vốn đối ứng (VNĐ)",
+            min_value=0,
+            value=int(extracted_data['von_doi_ung']),
+            step=1000000,
+            format="%d"
+        )
+        st.caption(f"💵 {format_number(von_doi_ung)} VNĐ")
+    
+    with col5:
+        so_tien_vay = st.number_input(
+            "Số tiền vay (VNĐ)",
+            min_value=0,
+            value=int(extracted_data['so_tien_vay']),
+            step=1000000,
+            format="%d"
+        )
+        st.caption(f"💵 {format_number(so_tien_vay)} VNĐ")
+    
+    col6, col7 = st.columns(2)
+    with col6:
+        lai_suat = st.number_input(
+            "Lãi suất (%/năm)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(extracted_data['lai_suat']),
+            step=0.1,
+            format="%.2f"
+        )
+    
+    with col7:
+        thoi_gian_vay = st.number_input(
+            "Thời gian vay (tháng)",
+            min_value=0,
+            max_value=360,
+            value=int(extracted_data['thoi_gian_vay']),
+            step=1
+        )
+    
+    st.markdown('<div class="sub-header">🏠 Vùng 3 - Thông tin Tài sản Đảm bảo</div>', unsafe_allow_html=True)
+    
+    col8, col9 = st.columns(2)
+    with col8:
+        mo_ta_tai_san = st.text_area(
+            "Mô tả tài sản",
+            value=extracted_data['mo_ta_tai_san'],
+            height=100
+        )
+    
+    with col9:
+        gia_tri_tai_san = st.number_input(
+            "Giá trị định giá (VNĐ)",
+            min_value=0,
+            value=int(extracted_data['gia_tri_tai_san']),
+            step=1000000,
+            format="%d"
+        )
+        st.caption(f"💵 {format_number(gia_tri_tai_san)} VNĐ")
+    
+    st.markdown('<div class="sub-header">💼 Thông tin Thu nhập & Chi phí</div>', unsafe_allow_html=True)
+    
+    col10, col11 = st.columns(2)
+    with col10:
+        thu_nhap_thang = st.number_input(
+            "Thu nhập hàng tháng (VNĐ)",
+            min_value=0,
+            value=int(extracted_data['thu_nhap_thang']),
+            step=1000000,
+            format="%d"
+        )
+        st.caption(f"💵 {format_number(thu_nhap_thang)} VNĐ")
+    
+    with col11:
+        chi_phi_thang = st.number_input(
+            "Chi phí hàng tháng (VNĐ)",
+            min_value=0,
+            value=int(extracted_data['chi_phi_thang']),
+            step=1000000,
+            format="%d"
+        )
+        st.caption(f"💵 {format_number(chi_phi_thang)} VNĐ")
+    
+    # Lưu dữ liệu vào session state
+    st.session_state.customer_data = {
+        'ho_ten': ho_ten,
+        'cccd': cccd,
+        'dia_chi': dia_chi,
+        'sdt': sdt,
+        'muc_dich_vay': muc_dich_vay,
+        'tong_nhu_cau_von': tong_nhu_cau_von,
+        'von_doi_ung': von_doi_ung,
+        'so_tien_vay': so_tien_vay,
+        'lai_suat': lai_suat,
+        'thoi_gian_vay': thoi_gian_vay,
+        'mo_ta_tai_san': mo_ta_tai_san,
+        'gia_tri_tai_san': gia_tri_tai_san,
+        'thu_nhap_thang': thu_nhap_thang,
+        'chi_phi_thang': chi_phi_thang
+    }
+
+# Tab 2: Phân tích Chỉ số
 with tab2:
-    st.header("Các chỉ số tài chính và Kế hoạch trả nợ")
-    if so_tien_vay > 0:
-        st.subheader("Các chỉ số tài chính quan trọng")
-        col1, col2, col3 = st.columns(3)
-       
-        # Tính toán chỉ số
-        ty_le_vay_tong_von = (so_tien_vay / tong_nhu_cau_von * 100) if tong_nhu_cau_von > 0 else 0
-        ty_le_doi_ung = (von_doi_ung / tong_nhu_cau_von * 100) if tong_nhu_cau_von > 0 else 0
-        ty_le_vay_tsdb = (so_tien_vay / tsdb_gia_tri * 100) if tsdb_gia_tri > 0 else 0
-        # Lưu chỉ số để xuất báo cáo
-        ratios_for_report = {
-            "Tỷ lệ Vay/Tổng nhu cầu vốn": f"{ty_le_vay_tong_von:.2f}%",
-            "Tỷ lệ Vốn đối ứng/Tổng nhu cầu vốn": f"{ty_le_doi_ung:.2f}%",
-            "Tỷ lệ Vay/Giá trị TSĐB": f"{ty_le_vay_tsdb:.2f}%"
-        }
-        st.session_state.ratios = ratios_for_report
-        col1.metric("Tỷ lệ Vay/Tổng nhu cầu vốn", f"{ty_le_vay_tong_von:.2f}%")
-        col2.metric("Tỷ lệ Vốn đối ứng", f"{ty_le_doi_ung:.2f}%")
-        col3.metric("Tỷ lệ Vay/Giá trị TSĐB", f"{ty_le_vay_tsdb:.2f}%", help="Tỷ lệ giữa số tiền vay và tổng giá trị tài sản đảm bảo.")
-        st.markdown("---")
-       
-        st.subheader("Bảng kế hoạch trả nợ chi tiết")
-        repayment_df = calculate_repayment_schedule(so_tien_vay, lai_suat, thoi_gian_vay)
-       
-        # Lưu bảng để có thể xuất Excel
-        st.session_state.repayment_df = repayment_df
-        if not repayment_df.empty:
-            # Định dạng lại các cột tiền tệ để hiển thị
-            df_display = repayment_df.copy()
-            currency_cols = ["Dư nợ đầu kỳ", "Gốc trả trong kỳ", "Lãi trả trong kỳ", "Tổng gốc và lãi", "Dư nợ cuối kỳ"]
-            for col in currency_cols:
-                df_display[col] = df_display[col].apply(format_currency)
-           
-            st.dataframe(df_display, use_container_width=True, height=min(35 * (len(df_display) + 1), 600))
-        else:
-            st.warning("Vui lòng nhập đầy đủ thông tin khoản vay (Số tiền, Lãi suất, Thời gian) để xem kế hoạch trả nợ.")
-    else:
-        st.info("Chưa có dữ liệu để phân tích. Vui lòng nhập thông tin ở tab 'Nhập liệu'.")
-# --------------------------------------------------------------------------------------
-# TAB 3: BIỂU ĐỒ TRỰC QUAN
-# --------------------------------------------------------------------------------------
-with tab3:
-    st.header("Trực quan hóa dữ liệu tài chính")
-    if so_tien_vay > 0 and von_doi_ung > 0:
-        col1, col2 = st.columns(2)
+    if 'customer_data' in st.session_state:
+        data = st.session_state.customer_data
+        
+        st.markdown('<div class="sub-header">📊 Các Chỉ số Tài chính Quan trọng</div>', unsafe_allow_html=True)
+        
+        # Tính toán các chỉ số
+        col1, col2, col3, col4 = st.columns(4)
+        
         with col1:
-            st.subheader("Cơ cấu Nguồn vốn")
-            labels = ['Vốn vay', 'Vốn đối ứng']
-            values = [so_tien_vay, von_doi_ung]
-            fig_pie = go.Figure(data=[go.Pie(
-                labels=labels,
-                values=values,
-                hole=.3,
-                textinfo='percent+label',
-                marker_colors=px.colors.sequential.Blues_r
-            )])
-            fig_pie.update_layout(
-                title_text='Tỷ trọng Vốn vay và Vốn đối ứng',
-                legend_title_text='Nguồn vốn',
-                uniformtext_minsize=12,
-                uniformtext_mode='hide'
+            ty_le_vay = (data['so_tien_vay'] / data['tong_nhu_cau_von'] * 100) if data['tong_nhu_cau_von'] > 0 else 0
+            st.metric(
+                "Tỷ lệ Vay/Tổng nhu cầu",
+                f"{ty_le_vay:.2f}%"
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+        
         with col2:
-            st.subheader("Biến động Dư nợ")
-            if 'repayment_df' in st.session_state and not st.session_state.repayment_df.empty:
-                df_chart = st.session_state.repayment_df
-                # Thêm dòng dư nợ ban đầu tại kỳ 0
-                initial_row = pd.DataFrame([{'Kỳ trả nợ': 0, 'Dư nợ cuối kỳ': so_tien_vay}])
-                df_chart = pd.concat([initial_row, df_chart[['Kỳ trả nợ', 'Dư nợ cuối kỳ']]], ignore_index=True)
+            ty_le_doi_ung = (data['von_doi_ung'] / data['tong_nhu_cau_von'] * 100) if data['tong_nhu_cau_von'] > 0 else 0
+            st.metric(
+                "Tỷ lệ Vốn đối ứng",
+                f"{ty_le_doi_ung:.2f}%"
+            )
+        
+        with col3:
+            ltv = (data['so_tien_vay'] / data['gia_tri_tai_san'] * 100) if data['gia_tri_tai_san'] > 0 else 0
+            st.metric(
+                "LTV (Loan to Value)",
+                f"{ltv:.2f}%"
+            )
+        
+        with col4:
+            thu_nhap_rong = data['thu_nhap_thang'] - data['chi_phi_thang']
+            st.metric(
+                "Thu nhập ròng/tháng",
+                f"{format_number(thu_nhap_rong)} VNĐ"
+            )
+        
+        st.markdown('<div class="sub-header">📅 Kế hoạch Trả nợ Chi tiết</div>', unsafe_allow_html=True)
+        
+        if data['so_tien_vay'] > 0 and data['thoi_gian_vay'] > 0:
+            schedule_df = calculate_repayment_schedule(
+                data['so_tien_vay'],
+                data['lai_suat'],
+                data['thoi_gian_vay']
+            )
+            
+            if not schedule_df.empty:
+                st.dataframe(
+                    schedule_df,
+                    use_container_width=True,
+                    height=400
+                )
+                
+                # Tổng hợp
+                col1, col2, col3 = st.columns(3)
+                
+                # Parse số từ chuỗi đã format
+                tong_goc = sum([parse_number(x) for x in schedule_df['Gốc trả']])
+                tong_lai = sum([parse_number(x) for x in schedule_df['Lãi trả']])
+                tong_thanh_toan = tong_goc + tong_lai
+                
+                with col1:
+                    st.info(f"**Tổng gốc:** {format_number(tong_goc)} VNĐ")
+                with col2:
+                    st.info(f"**Tổng lãi:** {format_number(tong_lai)} VNĐ")
+                with col3:
+                    st.info(f"**Tổng thanh toán:** {format_number(tong_thanh_toan)} VNĐ")
+        else:
+            st.warning("⚠️ Vui lòng nhập đầy đủ thông tin vay để xem kế hoạch trả nợ!")
+    else:
+        st.info("ℹ️ Vui lòng nhập thông tin ở Tab 'Nhập liệu & Trích xuất' trước.")
+
+# Tab 3: Biểu đồ Trực quan
+with tab3:
+    if 'customer_data' in st.session_state:
+        data = st.session_state.customer_data
+        
+        st.markdown('<div class="sub-header">📊 Cơ cấu Nguồn vốn</div>', unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Biểu đồ tròn cơ cấu vốn
+            if data['tong_nhu_cau_von'] > 0:
+                fig_pie = go.Figure(data=[go.Pie(
+                    labels=['Vốn vay', 'Vốn đối ứng'],
+                    values=[data['so_tien_vay'], data['von_doi_ung']],
+                    hole=0.3,
+                    marker_colors=['#1f77b4', '#ff7f0e']
+                )])
+                fig_pie.update_layout(
+                    title="Cơ cấu Nguồn vốn",
+                    height=400
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with col2:
+            # Biểu đồ thu nhập vs chi phí
+            fig_bar = go.Figure(data=[
+                go.Bar(name='Thu nhập', x=['Hàng tháng'], y=[data['thu_nhap_thang']], marker_color='#2ecc71'),
+                go.Bar(name='Chi phí', x=['Hàng tháng'], y=[data['chi_phi_thang']], marker_color='#e74c3c'),
+                go.Bar(name='Thu nhập ròng', x=['Hàng tháng'], y=[data['thu_nhap_thang'] - data['chi_phi_thang']], marker_color='#3498db')
+            ])
+            fig_bar.update_layout(
+                title="Thu nhập & Chi phí",
+                yaxis_title="VNĐ",
+                barmode='group',
+                height=400
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+        
+        # Biểu đồ dư nợ giảm dần
+        if data['so_tien_vay'] > 0 and data['thoi_gian_vay'] > 0:
+            st.markdown('<div class="sub-header">📉 Biểu đồ Dư nợ Giảm dần</div>', unsafe_allow_html=True)
+            
+            schedule_df = calculate_repayment_schedule(
+                data['so_tien_vay'],
+                data['lai_suat'],
+                data['thoi_gian_vay']
+            )
+            
+            if not schedule_df.empty:
+                # Convert string to number for plotting
+                du_no_values = [parse_number(x) for x in schedule_df['Dư nợ cuối kỳ']]
+                
                 fig_line = go.Figure()
                 fig_line.add_trace(go.Scatter(
-                    x=df_chart['Kỳ trả nợ'],
-                    y=df_chart['Dư nợ cuối kỳ'],
+                    x=schedule_df['Kỳ'],
+                    y=du_no_values,
                     mode='lines+markers',
                     name='Dư nợ',
-                    fill='tozeroy' # Tô màu vùng dưới đường line
+                    line=dict(color='#e74c3c', width=2),
+                    marker=dict(size=6)
                 ))
                 fig_line.update_layout(
-                    title_text='Dư nợ giảm dần qua các kỳ',
-                    xaxis_title='Kỳ trả nợ (Tháng)',
-                    yaxis_title='Dư nợ còn lại (VNĐ)',
+                    title="Dư nợ Giảm dần theo Thời gian",
+                    xaxis_title="Kỳ trả nợ",
+                    yaxis_title="Dư nợ (VNĐ)",
+                    height=400,
+                    hovermode='x unified'
                 )
                 st.plotly_chart(fig_line, use_container_width=True)
-            else:
-                 st.warning("Không có dữ liệu kế hoạch trả nợ để vẽ biểu đồ.")
     else:
-        st.info("Chưa có dữ liệu để vẽ biểu đồ. Vui lòng nhập thông tin ở tab 'Nhập liệu'.")
-# --------------------------------------------------------------------------------------
-# TAB 4: PHÂN TÍCH BỞI AI
-# --------------------------------------------------------------------------------------
+        st.info("ℹ️ Vui lòng nhập thông tin ở Tab 'Nhập liệu & Trích xuất' trước.")
+
+# Tab 4: Phân tích bởi AI
 with tab4:
-    st.header("Phân tích Chuyên sâu với Trí tuệ Nhân tạo (Gemini)")
-   
     if not api_key:
-        st.warning("Vui lòng nhập Gemini API Key ở thanh bên để sử dụng tính năng này.")
+        st.warning("⚠️ Vui lòng nhập Gemini API Key ở thanh bên để sử dụng tính năng AI!")
+        st.info("💡 **Hướng dẫn lấy API Key:** Mở sidebar → Nhấn vào 'Hướng dẫn lấy Gemini API Key'")
+    elif 'customer_data' not in st.session_state:
+        st.info("ℹ️ Vui lòng nhập thông tin ở Tab 'Nhập liệu & Trích xuất' trước.")
     else:
-        # Hiển thị thông tin khoản vay đã nhập để người dùng xem trước khi phân tích
-        with st.expander("📊 Xem thông tin khoản vay đã nhập", expanded=False):
-            st.subheader("Thông tin khách hàng")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**Họ và tên:** {st.session_state.get('ho_ten', 'Chưa nhập')}")
-                st.write(f"**CCCD/CMND:** {st.session_state.get('cccd', 'Chưa nhập')}")
-            with col2:
-                st.write(f"**Số điện thoại:** {st.session_state.get('sdt', 'Chưa nhập')}")
-                st.write(f"**Địa chỉ:** {st.session_state.get('dia_chi', 'Chưa nhập')}")
-            
-            st.markdown("---")
-            st.subheader("Thông tin phương án vay")
-            st.write(f"**Mục đích vay:** {st.session_state.get('muc_dich_vay', 'Chưa nhập')}")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Tổng nhu cầu vốn", f"{format_currency(st.session_state.get('tong_nhu_cau_von', 0))} VNĐ")
-                st.metric("Vốn đối ứng", f"{format_currency(st.session_state.get('von_doi_ung', 0))} VNĐ")
-            with col2:
-                st.metric("Số tiền vay", f"{format_currency(st.session_state.get('so_tien_vay', 0))} VNĐ")
-                st.metric("Lãi suất", f"{st.session_state.get('lai_suat', 0)}%/năm")
-            with col3:
-                st.metric("Thời gian vay", f"{st.session_state.get('thoi_gian_vay', 0)} tháng")
-                st.metric("Giá trị TSĐB", f"{format_currency(st.session_state.get('tsdb_gia_tri', 0))} VNĐ")
-            
-            if 'ratios' in st.session_state:
-                st.markdown("---")
-                st.subheader("Các chỉ số tài chính")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Tỷ lệ Vay/Tổng vốn", st.session_state.ratios.get('Tỷ lệ Vay/Tổng nhu cầu vốn', 'N/A'))
-                with col2:
-                    st.metric("Tỷ lệ Vốn đối ứng", st.session_state.ratios.get('Tỷ lệ Vốn đối ứng/Tổng nhu cầu vốn', 'N/A'))
-                with col3:
-                    st.metric("Tỷ lệ Vay/TSĐB", st.session_state.ratios.get('Tỷ lệ Vay/Giá trị TSĐB', 'N/A'))
+        data = st.session_state.customer_data
         
-        try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.0-flash-exp') # Hoặc gemini-pro
-        except Exception as e:
-            st.error(f"Lỗi khởi tạo Gemini: {e}")
-            model = None
-        if st.button("🚀 Bắt đầu Phân tích", use_container_width=True, disabled=(not model or not st.session_state.data_extracted)):
-           
-            # Phân tích 1: Dựa trên dữ liệu đã hiệu chỉnh trên ứng dụng
-            with st.spinner("AI đang phân tích các chỉ số và dữ liệu đã hiệu chỉnh trên ứng dụng..."):
-                # Tổng hợp thông tin từ session_state thành một chuỗi
-                adjusted_data_summary = f"""
-                - Khách hàng: {st.session_state.ho_ten}, CCCD: {st.session_state.cccd}
-                - Địa chỉ: {st.session_state.dia_chi}
-                - Số điện thoại: {st.session_state.sdt}
-                - Mục đích vay: {st.session_state.muc_dich_vay}
-                - Tổng nhu cầu vốn: {format_currency(st.session_state.tong_nhu_cau_von)} VNĐ
-                - Vốn đối ứng: {format_currency(st.session_state.von_doi_ung)} VNĐ
-                - Số tiền vay: {format_currency(st.session_state.so_tien_vay)} VNĐ
-                - Lãi suất: {st.session_state.lai_suat}%/năm
-                - Thời gian vay: {st.session_state.thoi_gian_vay} tháng
-                - Mô tả TSĐB: {st.session_state.tsdb_mo_ta}
-                - Tổng giá trị TSĐB: {format_currency(st.session_state.tsdb_gia_tri)} VNĐ
-                - Tỷ lệ Vay/TSĐB: {st.session_state.get('ratios', {}).get('Tỷ lệ Vay/Giá trị TSĐB', 'N/A')}
-                - Tỷ lệ Vay/Tổng vốn: {st.session_state.get('ratios', {}).get('Tỷ lệ Vay/Tổng nhu cầu vốn', 'N/A')}
-                - Tỷ lệ Vốn đối ứng: {st.session_state.get('ratios', {}).get('Tỷ lệ Vốn đối ứng/Tổng nhu cầu vốn', 'N/A')}
-                """
-               
-                prompt1 = f"""
-                Với vai trò là một chuyên gia thẩm định tín dụng ngân hàng, hãy phân tích sâu về các chỉ số tài chính của phương án vay vốn dựa trên các thông số đã được nhập và hiệu chỉnh trên hệ thống dưới đây.
-                
-                Hãy tập trung vào:
-                1. Đánh giá tổng quan về thông tin khách hàng và mục đích vay vốn
-                2. Phân tích tính hợp lý của cơ cấu nguồn vốn (tỷ lệ vay/vốn đối ứng/tổng nhu cầu)
-                3. Đánh giá khả năng trả nợ dựa trên số tiền vay, lãi suất và thời hạn
-                4. Phân tích mức độ an toàn của khoản vay dựa trên tỷ lệ cho vay so với giá trị tài sản đảm bảo (LTV)
-                5. Đưa ra các khuyến nghị cụ thể để tăng tính khả thi cho phương án
-                6. Đánh giá rủi ro tín dụng và các điểm cần lưu ý
-                
-                Dữ liệu đã nhập trên ứng dụng:
-                ---
-                {adjusted_data_summary}
-                ---
-                
-                Hãy phân tích chi tiết và đưa ra đánh giá chuyên môn về phương án vay vốn này.
-                """
+        st.markdown('<div class="sub-header">🤖 Phân tích Thông minh bằng AI</div>', unsafe_allow_html=True)
+        
+        if st.button("🚀 Bắt đầu Phân tích", type="primary"):
+            with st.spinner('🔄 Đang phân tích...'):
                 try:
-                    response1 = model.generate_content(prompt1)
-                    st.session_state.ai_analysis_1 = response1.text
-                except Exception as e:
-                    st.session_state.ai_analysis_1 = f"Lỗi khi gọi API Gemini: {e}"
-           
-            # Phân tích 2: Dựa trên file .docx gốc
-            with st.spinner("AI đang phân tích nội dung file .docx của khách hàng..."):
-                if st.session_state.docx_text:
+                    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                    
+                    # Phân tích 1: Dựa trên file gốc
+                    st.markdown("### 📄 Phân tích 1 - Dựa trên File gốc")
+                    st.caption("*Nguồn dữ liệu: Phân tích từ file .docx của khách hàng*")
+                    
+                    if st.session_state.uploaded_content:
+                        prompt1 = f"""
+Bạn là chuyên gia thẩm định tín dụng ngân hàng. Hãy phân tích phương án kinh doanh sau:
+
+{st.session_state.uploaded_content}
+
+Hãy đưa ra nhận định về:
+1. Tổng quan về phương án
+2. Điểm mạnh của phương án
+3. Điểm yếu và rủi ro
+4. Đề xuất cải thiện (nếu có)
+
+Trả lời bằng tiếng Việt, ngắn gọn và chuyên nghiệp.
+"""
+                        response1 = model.generate_content(prompt1)
+                        st.markdown(response1.text)
+                    else:
+                        st.warning("Chưa có file upload để phân tích.")
+                    
+                    st.markdown("---")
+                    
+                    # Phân tích 2: Dựa trên dữ liệu đã hiệu chỉnh
+                    st.markdown("### 📊 Phân tích 2 - Dựa trên Dữ liệu đã Hiệu chỉnh")
+                    st.caption("*Nguồn dữ liệu: Phân tích từ các thông số và chỉ số đã tính toán trên ứng dụng*")
+                    
+                    ty_le_vay = (data['so_tien_vay'] / data['tong_nhu_cau_von'] * 100) if data['tong_nhu_cau_von'] > 0 else 0
+                    ty_le_doi_ung = (data['von_doi_ung'] / data['tong_nhu_cau_von'] * 100) if data['tong_nhu_cau_von'] > 0 else 0
+                    ltv = (data['so_tien_vay'] / data['gia_tri_tai_san'] * 100) if data['gia_tri_tai_san'] > 0 else 0
+                    thu_nhap_rong = data['thu_nhap_thang'] - data['chi_phi_thang']
+                    
+                    # Tính khoản trả hàng tháng
+                    if data['so_tien_vay'] > 0 and data['thoi_gian_vay'] > 0:
+                        lai_suat_thang = data['lai_suat'] / 12 / 100
+                        goc_tra = data['so_tien_vay'] / data['thoi_gian_vay']
+                        lai_tra_ky_dau = data['so_tien_vay'] * lai_suat_thang
+                        tong_tra_ky_dau = goc_tra + lai_tra_ky_dau
+                        
+                        dscr = thu_nhap_rong / tong_tra_ky_dau if tong_tra_ky_dau > 0 else 0
+                    else:
+                        tong_tra_ky_dau = 0
+                        dscr = 0
+                    
                     prompt2 = f"""
-                    Với vai trò là một chuyên gia thẩm định tín dụng ngân hàng, hãy phân tích toàn bộ nội dung của phương án kinh doanh được khách hàng cung cấp trong file .docx dưới đây.
+Bạn là chuyên gia thẩm định tín dụng. Phân tích khoản vay với các thông số sau:
+
+THÔNG TIN KHÁCH HÀNG:
+- Họ tên: {data['ho_ten']}
+- Mục đích vay: {data['muc_dich_vay']}
+
+THÔNG TIN TÀI CHÍNH:
+- Tổng nhu cầu vốn: {format_number(data['tong_nhu_cau_von'])} VNĐ
+- Vốn đối ứng: {format_number(data['von_doi_ung'])} VNĐ ({ty_le_doi_ung:.2f}%)
+- Số tiền vay: {format_number(data['so_tien_vay'])} VNĐ ({ty_le_vay:.2f}%)
+- Lãi suất: {data['lai_suat']}%/năm
+- Thời hạn: {data['thoi_gian_vay']} tháng
+
+THU NHẬP & CHI PHÍ:
+- Thu nhập tháng: {format_number(data['thu_nhap_thang'])} VNĐ
+- Chi phí tháng: {format_number(data['chi_phi_thang'])} VNĐ
+- Thu nhập ròng: {format_number(thu_nhap_rong)} VNĐ
+- Khoản trả nợ kỳ đầu: {format_number(tong_tra_ky_dau)} VNĐ
+- DSCR (Debt Service Coverage Ratio): {dscr:.2f}
+
+TÀI SẢN ĐẢM BẢO:
+- Mô tả: {data['mo_ta_tai_san']}
+- Giá trị: {format_number(data['gia_tri_tai_san'])} VNĐ
+- LTV: {ltv:.2f}%
+
+Hãy đánh giá:
+1. Tính khả thi tài chính của khoản vay
+2. Khả năng trả nợ của khách hàng
+3. Mức độ rủi ro và các yếu tố cần lưu ý
+4. Kiến nghị chấp thuận/từ chối/điều chỉnh
+
+Trả lời bằng tiếng Việt, chuyên nghiệp và chi tiết.
+"""
+                    response2 = model.generate_content(prompt2)
+                    st.markdown(response2.text)
                     
-                    Cần tập trung vào các điểm sau:
-                    1. Tóm tắt tổng quan về phương án kinh doanh
-                    2. Phân tích các điểm mạnh của phương án (ví dụ: kinh nghiệm, thị trường, sản phẩm/dịch vụ, khả năng cạnh tranh)
-                    3. Phân tích các điểm yếu hoặc các điểm cần làm rõ thêm
-                    4. Nhận diện các rủi ro tiềm ẩn (rủi ro thị trường, rủi ro hoạt động, rủi ro tài chính)
-                    5. Đánh giá tính khả thi và hiệu quả của phương án kinh doanh
-                    6. Đưa ra kết luận sơ bộ và các kiến nghị
+                except Exception as e:
+                    error_msg = str(e)
                     
-                    Nội dung phương án kinh doanh từ file .docx:
-                    ---
-                    {st.session_state.docx_text}
-                    ---
-                    """
-                    try:
-                        response2 = model.generate_content(prompt2)
-                        st.session_state.ai_analysis_2 = response2.text
-                    except Exception as e:
-                         st.session_state.ai_analysis_2 = f"Lỗi khi gọi API Gemini: {e}"
-                else:
-                    st.session_state.ai_analysis_2 = "Không có nội dung file .docx để phân tích."
-        
-        # Hiển thị kết quả phân tích
-        if 'ai_analysis_1' in st.session_state:
-            with st.expander("1. Phân tích từ dữ liệu trên ứng dụng", expanded=True):
-                st.info("Nguồn dữ liệu: Các thông số và chỉ số tài chính đã nhập/hiệu chỉnh trên ứng dụng.")
-                st.markdown(st.session_state.ai_analysis_1)
-        
-        if 'ai_analysis_2' in st.session_state:
-            with st.expander("2. Phân tích từ file .docx của khách hàng", expanded=True):
-                st.info("Nguồn dữ liệu: Nội dung phương án kinh doanh từ file .docx khách hàng tải lên.")
-                st.markdown(st.session_state.ai_analysis_2)
-# --------------------------------------------------------------------------------------
-# TAB 5: CHATBOT HỖ TRỢ
-# --------------------------------------------------------------------------------------
+                    if "API_KEY_INVALID" in error_msg or "expired" in error_msg.lower():
+                        st.error("❌ **API Key không hợp lệ hoặc đã hết hạn!**")
+                        st.markdown("""
+                        <div class='api-note'>
+                            <strong>💡 Giải pháp:</strong><br>
+                            1. Mở sidebar (thanh bên trái)<br>
+                            2. Tạo API key mới tại: <a href='https://aistudio.google.com/app/apikey' target='_blank'>Google AI Studio</a><br>
+                            3. Copy API key mới và paste vào ô "Gemini API Key"<br>
+                            4. Thử lại phân tích
+                        </div>
+                        """, unsafe_allow_html=True)
+                    elif "quota" in error_msg.lower() or "rate" in error_msg.lower():
+                        st.error("❌ **Đã vượt quá giới hạn sử dụng API!**")
+                        st.info("💡 Vui lòng đợi 1 phút hoặc tạo API key mới.")
+                    else:
+                        st.error(f"❌ **Lỗi khi gọi API:**")
+                        st.code(error_msg)
+                        st.info("💡 Vui lòng kiểm tra lại API key hoặc kết nối Internet.")
+
+# Tab 5: Chatbot
 with tab5:
-    st.header("Chatbot Hỗ trợ Thẩm định")
     if not api_key:
-        st.warning("Vui lòng nhập Gemini API Key ở thanh bên để sử dụng tính năng này.")
+        st.warning("⚠️ Vui lòng nhập Gemini API Key ở thanh bên để sử dụng Chatbot!")
+        st.info("💡 **Hướng dẫn lấy API Key:** Mở sidebar → Nhấn vào 'Hướng dẫn lấy Gemini API Key'")
     else:
-        try:
-            # Khởi tạo model cho chatbot
-            model_chat = genai.GenerativeModel('gemini-2.0-flash-exp')
-            chat = model_chat.start_chat(history=[])
-        except Exception as e:
-            st.error(f"Lỗi khởi tạo Gemini Chat: {e}")
-            chat = None
+        st.markdown('<div class="sub-header">💬 Chatbot Hỗ trợ Thẩm định</div>', unsafe_allow_html=True)
+        
+        # Nút xóa lịch sử
+        col1, col2 = st.columns([6, 1])
+        with col2:
+            if st.button("🗑️ Xóa lịch sử"):
+                st.session_state.chat_history = []
+                st.rerun()
+        
         # Hiển thị lịch sử chat
         for message in st.session_state.chat_history:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
-        # Input từ người dùng
-        if prompt := st.chat_input("Đặt câu hỏi về thẩm định, tài chính..."):
-            if chat:
-                # Thêm tin nhắn của người dùng vào lịch sử và hiển thị
-                st.session_state.chat_history.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-                # Gửi tin nhắn đến Gemini và nhận phản hồi
+        
+        # Input chat
+        if prompt := st.chat_input("Hỏi gì đó về phương án..."):
+            # Thêm tin nhắn người dùng
+            st.session_state.chat_history.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            
+            # Tạo context từ dữ liệu hiện tại
+            context = ""
+            if 'customer_data' in st.session_state:
+                data = st.session_state.customer_data
+                context = f"""
+THÔNG TIN PHƯƠNG ÁN HIỆN TẠI:
+- Khách hàng: {data['ho_ten']}
+- Mục đích: {data['muc_dich_vay']}
+- Số tiền vay: {format_number(data['so_tien_vay'])} VNĐ
+- Lãi suất: {data['lai_suat']}%/năm
+- Thời hạn: {data['thoi_gian_vay']} tháng
+- Thu nhập tháng: {format_number(data['thu_nhap_thang'])} VNĐ
+- Chi phí tháng: {format_number(data['chi_phi_thang'])} VNĐ
+"""
+            
+            # Gọi AI
+            try:
+                model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                
+                full_prompt = f"""
+Bạn là trợ lý AI chuyên về thẩm định tín dụng ngân hàng. 
+
+{context}
+
+Câu hỏi: {prompt}
+
+Trả lời ngắn gọn, chuyên nghiệp bằng tiếng Việt.
+"""
+                
+                response = model.generate_content(full_prompt)
+                assistant_response = response.text
+                
+                # Thêm phản hồi vào lịch sử
+                st.session_state.chat_history.append({"role": "assistant", "content": assistant_response})
+                
                 with st.chat_message("assistant"):
-                    with st.spinner("Bot đang suy nghĩ..."):
-                        try:
-                            # Bổ sung context từ file vào prompt
-                            context_prompt = f"""
-                            Dựa trên bối cảnh của phương án kinh doanh này (nếu có):
-                            ---
-                            {st.session_state.docx_text[:2000]}...
-                            ---
-                            Và dữ liệu tổng hợp:
-                            ---
-                            - Khách hàng: {st.session_state.get('ho_ten', 'N/A')}
-                            - Số tiền vay: {format_currency(st.session_state.get('so_tien_vay', 0))} VNĐ
-                            - Mục đích: {st.session_state.get('muc_dich_vay', 'N/A')}
-                            ---
-                            Hãy trả lời câu hỏi sau: "{prompt}"
-                            """
-                            response = chat.send_message(context_prompt)
-                            response_text = response.text
-                            st.markdown(response_text)
-                            # Thêm phản hồi của bot vào lịch sử
-                            st.session_state.chat_history.append({"role": "assistant", "content": response_text})
-                        except Exception as e:
-                            error_message = f"Xin lỗi, đã có lỗi xảy ra: {e}"
-                            st.error(error_message)
-                            st.session_state.chat_history.append({"role": "assistant", "content": error_message})
-            else:
-                st.error("Không thể khởi tạo chatbot. Vui lòng kiểm tra API Key.")
-        if st.session_state.chat_history:
-            if st.button("🗑️ Xóa lịch sử trò chuyện"):
-                st.session_state.chat_history = []
-                st.rerun()
-# ======================================================================================
-# LOGIC XỬ LÝ NÚT EXPORT (đặt ở cuối để truy cập được mọi state)
-# ======================================================================================
-if execute_export:
-    if export_option == "Xuất Kế hoạch trả nợ (Excel)":
-        if 'repayment_df' in st.session_state and not st.session_state.repayment_df.empty:
-            excel_data = generate_excel_download(st.session_state.repayment_df)
-            st.sidebar.download_button(
-                label="📥 Tải xuống file Excel",
-                data=excel_data,
-                file_name=f"KeHoachTraNo_{st.session_state.get('ho_ten', 'KH')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-            st.sidebar.success("Đã tạo file Excel!")
-        else:
-            st.sidebar.error("Không có dữ liệu kế hoạch trả nợ để xuất.")
-    elif export_option == "Xuất Báo cáo Thẩm định":
-        if st.session_state.data_extracted:
-            with st.spinner("Đang tạo báo cáo..."):
-                customer_info = {k: st.session_state.get(k) for k in ['ho_ten', 'cccd', 'sdt', 'dia_chi']}
-                loan_info = {k: st.session_state.get(k) for k in ['muc_dich_vay', 'tong_nhu_cau_von', 'von_doi_ung', 'so_tien_vay', 'lai_suat', 'thoi_gian_vay']}
-                collateral_info = {k: st.session_state.get(k) for k in ['tsdb_mo_ta', 'tsdb_gia_tri']}
-               
-                report_data = generate_report_docx(
-                    customer_info,
-                    loan_info,
-                    collateral_info,
-                    st.session_state.get('ratios', {}),
-                    st.session_state.get('ai_analysis_1', 'Chưa thực hiện phân tích.'),
-                    st.session_state.get('ai_analysis_2', 'Chưa thực hiện phân tích.')
-                )
-                st.sidebar.download_button(
-                    label="📥 Tải xuống Báo cáo (.docx)",
-                    data=report_data,
-                    file_name=f"BaoCaoThamDinh_{st.session_state.get('ho_ten', 'KH')}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True
-                )
-                st.sidebar.success("Đã tạo file báo cáo!")
-        else:
-            st.sidebar.error("Chưa có dữ liệu để tạo báo cáo.")
+                    st.markdown(assistant_response)
+                    
+            except Exception as e:
+                error_msg = str(e)
+                
+                if "API_KEY_INVALID" in error_msg or "expired" in error_msg.lower():
+                    error_response = """❌ **API Key không hợp lệ hoặc đã hết hạn!**
+
+💡 **Giải pháp:**
+1. Mở sidebar (thanh bên trái)
+2. Tạo API key mới tại: [Google AI Studio](https://aistudio.google.com/app/apikey)
+3. Copy API key mới và paste vào ô "Gemini API Key"
+4. Thử lại câu hỏi"""
+                    
+                elif "quota" in error_msg.lower() or "rate" in error_msg.lower():
+                    error_response = "❌ Đã vượt quá giới hạn sử dụng API! Vui lòng đợi 1 phút hoặc tạo API key mới."
+                else:
+                    error_response = f"❌ Lỗi: {error_msg}\n\n💡 Vui lòng kiểm tra lại API key hoặc kết nối Internet."
+                
+                st.session_state.chat_history.append({"role": "assistant", "content": error_response})
+                with st.chat_message("assistant"):
+                    st.markdown(error_response)
+
+# Footer
+st.markdown("---")
+st.markdown(
+    """
+    <div style='text-align: center; color: #666; padding: 1rem;'>
+        <p>© 2024 Hệ thống Thẩm định Phương án Kinh doanh | Phát triển bởi AI</p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
