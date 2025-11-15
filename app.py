@@ -79,16 +79,17 @@ if 'uploaded_content' not in st.session_state:
 
 # Hàm định dạng số
 def format_number(num):
-    """Định dạng số với dấu phẩy phân cách hàng nghìn"""
+    """Định dạng số với dấu chấm phân cách hàng nghìn"""
     if num == 0:
         return "0"
-    return f"{int(num):,}"
+    return f"{int(num):,}".replace(",", ".")
 
 def parse_number(text):
-    """Chuyển đổi text có dấu phẩy thành số"""
+    """Chuyển đổi text có dấu chấm phân cách hàng nghìn thành số"""
     if isinstance(text, (int, float)):
         return float(text)
-    return float(str(text).replace(",", ""))
+    # Loại bỏ dấu chấm phân cách hàng nghìn, giữ dấu phẩy làm dấu thập phân
+    return float(str(text).replace(".", "").replace(",", "."))
 
 # Hàm trích xuất thông tin từ file docx
 def extract_info_from_docx(file):
@@ -346,12 +347,45 @@ with st.sidebar:
         placeholder="AIza..."
     )
     
+    # Chọn phiên bản API Model
+    st.markdown("### 🤖 Phiên bản AI Model")
+    
+    gemini_models = {
+        "Gemini 2.0 Flash (Mới nhất - Nhanh)": "gemini-2.0-flash-exp",
+        "Gemini 1.5 Pro (Mạnh mẽ)": "gemini-1.5-pro-latest",
+        "Gemini 1.5 Flash (Nhanh)": "gemini-1.5-flash-latest",
+        "Gemini 1.0 Pro": "gemini-1.0-pro-latest"
+    }
+    
+    selected_model_name = st.selectbox(
+        "Chọn model AI",
+        options=list(gemini_models.keys()),
+        index=0,
+        help="Gemini 2.0 Flash: Mới nhất, nhanh và miễn phí. Gemini 1.5 Pro: Phân tích sâu hơn."
+    )
+    
+    selected_model = gemini_models[selected_model_name]
+    
+    # Lưu model vào session state
+    st.session_state.selected_model = selected_model
+    
+    # Hiển thị thông tin model
+    with st.expander("ℹ️ Thông tin Model", expanded=False):
+        if "2.0" in selected_model:
+            st.info("**Gemini 2.0 Flash**\n- Phiên bản mới nhất\n- Tốc độ nhanh\n- Phù hợp cho hầu hết tác vụ")
+        elif "1.5-pro" in selected_model:
+            st.info("**Gemini 1.5 Pro**\n- Phân tích chuyên sâu\n- Context window lớn\n- Phù hợp cho tác vụ phức tạp")
+        elif "1.5-flash" in selected_model:
+            st.info("**Gemini 1.5 Flash**\n- Tốc độ cao\n- Hiệu quả\n- Phù hợp cho phản hồi nhanh")
+        else:
+            st.info("**Gemini 1.0 Pro**\n- Phiên bản ổn định\n- Đáng tin cậy")
+    
     if api_key:
         try:
             genai.configure(api_key=api_key)
-            # Test API key
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
-            st.success("✅ API Key hợp lệ!")
+            # Test API key với model đã chọn
+            model = genai.GenerativeModel(selected_model)
+            st.success(f"✅ API Key hợp lệ!\n\n🤖 Đang sử dụng: **{selected_model_name}**")
         except Exception as e:
             if "API_KEY_INVALID" in str(e) or "expired" in str(e).lower():
                 st.error("❌ API Key không hợp lệ hoặc đã hết hạn!")
@@ -740,7 +774,9 @@ with tab4:
         if st.button("🚀 Bắt đầu Phân tích", type="primary"):
             with st.spinner('🔄 Đang phân tích...'):
                 try:
-                    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                    # Lấy model đã chọn từ session state
+                    selected_model = st.session_state.get('selected_model', 'gemini-2.0-flash-exp')
+                    model = genai.GenerativeModel(selected_model)
                     
                     # Phân tích 1: Dựa trên file gốc
                     st.markdown("### 📄 Phân tích 1 - Dựa trên File gốc")
@@ -891,7 +927,9 @@ THÔNG TIN PHƯƠNG ÁN HIỆN TẠI:
             
             # Gọi AI
             try:
-                model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                # Lấy model đã chọn từ session state
+                selected_model = st.session_state.get('selected_model', 'gemini-2.0-flash-exp')
+                model = genai.GenerativeModel(selected_model)
                 
                 full_prompt = f"""
 Bạn là trợ lý AI chuyên về thẩm định tín dụng ngân hàng. 
